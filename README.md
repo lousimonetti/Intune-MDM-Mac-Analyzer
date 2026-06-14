@@ -17,6 +17,7 @@ managed Mac itself or on an analyst's machine against collected logs.
 | Source | Default location(s) | What we look for |
 | --- | --- | --- |
 | **Intune MDM agent** | `/Library/Logs/Microsoft/Intune/`, `~/Library/Logs/Microsoft/Intune/` (`IntuneMDMDaemon`/`IntuneMDMAgent` logs) | Enrollment, check-in/sync, Entra (AAD) token/auth, policy & profile application, app deployment, compliance, SCEP/PKCS certs |
+| **Platform SSO** | `~/Library/Containers/com.microsoft.CompanyPortalMac.ssoextension/.../Logs/Microsoft/SSOExtension/`, Apple `com.apple.AppSSO`/`PlatformSSO` log exports, `app-sso platform -s` (live) | PSSO registration failures, corrupted device config (re-registration loop), SSOe payload misconfiguration, extension not loaded, PRT/token errors, associated-domain (TLS) failures, password-sync failures |
 | **macOS app install** | `/var/log/install.log` | PackageKit install failures, blocked downgrades |
 | **Microsoft Defender** | `/Library/Logs/Microsoft/mdatp/`, `/Library/Application Support/Microsoft/Defender/`, `mdatp health` (live) | Unhealthy agent, real-time protection off, stale definitions, connectivity, install errors, threat detections |
 | **Microsoft AutoUpdate** | `/Library/Logs/Microsoft/autoupdate.log` | Update/download failures, automatic updates disabled |
@@ -31,6 +32,8 @@ baselines).
 Log locations follow Microsoft Learn documentation for
 [shell-script log collection](https://learn.microsoft.com/intune/device-management/tools/run-shell-scripts-macos),
 [Defender on macOS](https://learn.microsoft.com/defender-endpoint/mac-resources),
+the [Enterprise SSO extension](https://learn.microsoft.com/entra/identity/devices/troubleshoot-mac-sso-extension-plugin)
+and [Platform SSO troubleshooting](https://learn.microsoft.com/entra/identity/devices/troubleshoot-macos-platform-single-sign-on-extension),
 and MAU/Office diagnostics.
 
 ---
@@ -117,7 +120,7 @@ collector  ->  parsers/*  ->  analyzer (rules + heuristics)  ->  report (HTML/PD
   read logs)     log lines)     severity + recommendations)
 ```
 
-- `collector.py` — offline (dir/zip) or live (macOS paths + `mdatp health`)
+- `collector.py` — offline (dir/zip) or live (macOS paths + `mdatp health` + `app-sso platform -s`)
 - `parsers/` — forgiving, format-tolerant log parsing per source
 - `rules.py` — declarative detection signatures (easy to extend)
 - `analyzer.py` — collapses matches into findings, adds aggregate insight

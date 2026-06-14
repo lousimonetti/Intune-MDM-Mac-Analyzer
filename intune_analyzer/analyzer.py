@@ -184,6 +184,24 @@ class Analyzer:
                                "automatic updates.",
                 category="Optimization",
             ))
+        if Source.PSSO in summaries:
+            out.append(Finding(
+                id="OPP-PSSO-METHOD",
+                severity=Severity.INFO,
+                source=Source.PSSO,
+                title="Confirm the Platform SSO authentication method",
+                description="Platform SSO logs are present. Choosing Secure "
+                            "Enclave (or passkey) over password authentication "
+                            "strengthens the credential and unlocks phishing-"
+                            "resistant sign-in.",
+                recommendation="Review the settings-catalog SSO profile's "
+                               "authentication method and enable Keyvault "
+                               "recovery so data is recoverable after a "
+                               "password reset.",
+                category="Optimization",
+                docs_url="https://learn.microsoft.com/intune/device-configuration/"
+                         "settings-catalog/configure-platform-sso-macos",
+            ))
         if Source.INTUNE in summaries:
             out.append(Finding(
                 id="OPP-INTUNE-BASELINE",

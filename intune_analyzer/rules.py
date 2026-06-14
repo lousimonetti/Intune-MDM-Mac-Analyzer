@@ -391,5 +391,153 @@ RULES: list[Rule] = [
         docs_url="https://github.com/apple/device-management/blob/release/"
                  "declarative/status/softwareupdate.failure-reason.yaml",
     ),
+
+    # ------------------------------------------------------------------ #
+    # Platform SSO (PSSO) / Microsoft Enterprise SSO plug-in.
+    # Signatures grounded in Microsoft Learn troubleshooting docs:
+    #   entra/identity/devices/troubleshoot-mac-sso-extension-plugin
+    #   entra/identity/devices/troubleshoot-macos-platform-single-sign-on-extension
+    #   intune/device-configuration/settings-catalog/configure-platform-sso-macos
+    # ------------------------------------------------------------------ #
+    Rule(
+        id="PSSO-REGISTER-FAIL",
+        source=Source.PSSO,
+        pattern=r"(platform ?sso|psso).*(registration|register).*(fail|error)|"
+                r"registration (failed|error|incomplete)|"
+                r"re-?registration (required|prompt)|device (join|registration) failed|"
+                r"failed to register (the )?(device|platform sso)",
+        severity=Severity.HIGH,
+        title="Platform SSO device registration failures",
+        description="The Enterprise SSO plug-in logged a Platform SSO "
+                    "registration failure. Until registration completes the "
+                    "device has no Secure Enclave / password-synced credential, "
+                    "so SSO and device-based Conditional Access do not work.",
+        recommendation="Confirm the user is allow-listed to join Microsoft "
+                       "Entra (Devices > Device Settings), retry registration "
+                       "from System Settings > Users & Groups (Repair) or the "
+                       "Company Portal, and check `app-sso platform -s` state.",
+        category="Authentication",
+        docs_url=f"{D}/entra/identity/devices/"
+                 "troubleshoot-macos-platform-single-sign-on-extension",
+    ),
+    Rule(
+        id="PSSO-CONFIG-CORRUPT",
+        source=Source.PSSO,
+        pattern=r"com\.apple\.PlatformSSO Code=-1001|"
+                r"error deserializing device config|"
+                r"garbage at end around line",
+        severity=Severity.HIGH,
+        title="Corrupted Platform SSO device configuration (re-registration loop)",
+        description="A known macOS 15 (Sequoia) concurrency issue between "
+                    "AppSSOAgent and AppSSODaemon can corrupt the PSSO device "
+                    "config (com.apple.PlatformSSO Code=-1001 'Error "
+                    "deserializing device config.'), triggering repeated "
+                    "re-registration prompts.",
+        recommendation="Update to macOS 15.3 or later where Apple's fix is "
+                       "deployed; if the prompts persist, capture a sysdiagnose "
+                       "and engage Apple support.",
+        category="Authentication",
+        docs_url=f"{D}/entra/identity/devices/"
+                 "troubleshoot-macos-platform-single-sign-on-extension",
+    ),
+    Rule(
+        id="PSSO-PAYLOAD-MISCONFIG",
+        source=Source.PSSO,
+        pattern=r"\b1000[12]\b.*(ssoe|payload)|"
+                r"misconfiguration in the ssoe payload|"
+                r"multiple ssoe payloads|"
+                r"(ssoe|sso ?extension) payload.*(conflict|misconfigur)",
+        severity=Severity.HIGH,
+        title="Platform SSO profile (SSOe payload) misconfiguration",
+        description="The SSO extension reported a payload error: 10001 "
+                    "(a required setting is missing or not applicable for the "
+                    "redirect payload) or 10002 (multiple conflicting SSO "
+                    "extension profiles are applied).",
+        recommendation="Ensure exactly one settings-catalog SSO profile is "
+                       "assigned (unassign any legacy Device-Features SSO "
+                       "profile) and that macOS 13/14 authentication settings "
+                       "are configured in the same policy.",
+        category="Policy",
+        docs_url=f"{D}/intune/device-configuration/settings-catalog/"
+                 "configure-platform-sso-macos",
+    ),
+    Rule(
+        id="PSSO-EXTENSION-INACTIVE",
+        source=Source.PSSO,
+        pattern=r"pluginkit code=16|other version in use|4s8qh|"
+                r"invalid team identifier of the extension|"
+                r"extension .*(not (loaded|running|activated)|failed to (load|launch))",
+        severity=Severity.HIGH,
+        title="Enterprise SSO extension not loaded / activated",
+        description="The operating system failed to launch the Microsoft "
+                    "Enterprise SSO extension (e.g. PlugInKit Code=16 'other "
+                    "version in use', error tag '4s8qh' on macOS 15.3/iOS "
+                    "18.1.1, or 'invalid team identifier' when SIP is disabled). "
+                    "Authentication then fails across all Entra-integrated apps.",
+        recommendation="Reboot the device to recover from the PlugInKit "
+                       "regression; verify System Integrity Protection (SIP) is "
+                       "enabled and the extension is "
+                       "com.microsoft.CompanyPortalMac.ssoextension (UBF8T346G9).",
+        category="Authentication",
+        docs_url=f"{D}/entra/identity/devices/troubleshoot-mac-sso-extension-plugin",
+    ),
+    Rule(
+        id="PSSO-PRT-TOKEN",
+        source=Source.PSSO,
+        pattern=r"\bprt\b.*(fail|error|expired|invalid|missing)|"
+                r"primary refresh token.*(fail|error|expired|invalid)|"
+                r"failed to (acquire|get|refresh).*(token|prt)|"
+                r"token (acquisition|request) failed",
+        severity=Severity.HIGH,
+        title="Platform SSO token / Primary Refresh Token errors",
+        description="The SSO broker could not acquire or refresh the Primary "
+                    "Refresh Token (PRT), so single sign-on and device-based "
+                    "Conditional Access break for the user.",
+        recommendation="Confirm the user can sign in to Entra ID, that the "
+                       "device registration is healthy (`app-sso platform -s`), "
+                       "and that no Conditional Access policy is blocking the "
+                       "device.",
+        category="Authentication",
+        docs_url=f"{D}/entra/identity/devices/troubleshoot-mac-sso-extension-plugin",
+    ),
+    Rule(
+        id="PSSO-ASSOCIATED-DOMAIN",
+        source=Source.PSSO,
+        pattern=r"associated domain.*(fail|error|not approved)|"
+                r"swcd|swcutil|app-site-association|"
+                r"(login\.microsoftonline\.com|cdn-apple\.com).*(fail|error|denied)",
+        severity=Severity.MEDIUM,
+        title="Associated-domain validation failures (likely TLS inspection)",
+        description="The associated-domain check used by the SSO extension "
+                    "failed. This commonly indicates TLS/HTTPS interception "
+                    "breaking validation of Apple's app-site-association or "
+                    "Microsoft login domains.",
+        recommendation="Exempt *.cdn-apple.com, *.networking.apple and "
+                       "login.microsoftonline.com from TLS inspection; reset "
+                       "with `sudo killall swcd` then `sudo swcutil reset`.",
+        category="Connectivity",
+        docs_url=f"{D}/entra/identity/devices/troubleshoot-mac-sso-extension-plugin",
+    ),
+    Rule(
+        id="PSSO-PASSWORD-SYNC",
+        source=Source.PSSO,
+        pattern=r"password (sync|synchroni[sz]ation).*(fail|error)|"
+                r"failed to (sync|synchroni[sz]e) (the )?password|"
+                r"passcode policy.*(mismatch|complexity)|"
+                r"per-?user mfa",
+        severity=Severity.MEDIUM,
+        title="Platform SSO password synchronization failures",
+        description="Password sync between Microsoft Entra ID and the local "
+                    "account failed. Common causes are a local passcode policy "
+                    "stricter than the Entra password, per-user MFA on the "
+                    "account, or temporary passwords from a reset.",
+        recommendation="Align the MDM passcode-complexity policy with Entra "
+                       "password rules, replace per-user MFA with Conditional "
+                       "Access MFA, and have users complete resets via the SSO "
+                       "extension prompt.",
+        category="Authentication",
+        docs_url=f"{D}/entra/identity/devices/"
+                 "troubleshoot-macos-platform-single-sign-on-extension",
+    ),
 ]
 

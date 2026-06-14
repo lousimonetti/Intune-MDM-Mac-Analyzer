@@ -10,10 +10,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import autoupdate, defender, install, intune, office, system
+from . import autoupdate, defender, install, intune, office, psso, system
 
-# Most specific first; ``install`` is the catch-all for *install.log.
-REGISTRY = [intune, defender, autoupdate, office, system, install]
+# Most specific first; ``install`` is the catch-all for *install.log. ``psso``
+# precedes ``office`` because the SSO extension also lives under a
+# ``com.microsoft.*`` container that ``office`` would otherwise claim.
+REGISTRY = [intune, psso, defender, autoupdate, office, system, install]
 
 __all__ = ["REGISTRY", "select", "parse_file"]
 

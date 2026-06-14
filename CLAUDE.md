@@ -10,11 +10,12 @@ used so they don't have to be rediscovered.
 ## 1. What this project is
 
 A Python tool that analyzes the logs that govern **Microsoft Intune management
-of macOS devices** — Intune MDM agent, macOS app installs, assigned policies,
-**Microsoft Defender for Endpoint**, **Microsoft AutoUpdate (MAU)** and
-**Microsoft Office** — and produces an **enhanced, self-contained HTML report**
-with **PDF** and **client-facing** export. It runs as both a **CLI** and a
-**GUI** from one shared engine.
+of macOS devices** — Intune MDM agent, **Platform SSO / Microsoft Enterprise SSO
+extension**, macOS app installs, assigned policies, **Microsoft Defender for
+Endpoint**, **Microsoft AutoUpdate (MAU)** and **Microsoft Office** — and
+produces an **enhanced, self-contained HTML report** with **PDF** and
+**client-facing** export. It runs as both a **CLI** and a **GUI** from one
+shared engine.
 
 Design tenets (do not regress these):
 - **Stdlib-only core.** No required third-party dependency. `weasyprint` is an
@@ -34,7 +35,7 @@ collector  ->  parsers/*  ->  rules + analyzer  ->  report (HTML/PDF/JSON)
 
 | File | Responsibility |
 | --- | --- |
-| `collector.py` | Discover & read logs. Offline (folder/`.zip`) or `--live` (macOS paths + `mdatp health`). |
+| `collector.py` | Discover & read logs. Offline (folder/`.zip`) or `--live` (macOS paths + `mdatp health` + `app-sso platform -s`). |
 | `parsers/base.py` | Format-tolerant line parsing: timestamp heuristics, level detection, multi-line continuation. |
 | `parsers/*.py` | One module per source; each exposes `NAME`, `SOURCE`, `matches()`, `parse()`. |
 | `parsers/__init__.py` | `select()` dispatch — **matches on filename + immediate parent dir only** (see Lesson L1). |
@@ -48,7 +49,7 @@ collector  ->  parsers/*  ->  rules + analyzer  ->  report (HTML/PDF/JSON)
 new module in `parsers/` + register in `REGISTRY` (order matters; most specific
 first, `install` is the catch-all for `*install.log`).
 
-Run `pytest` (18 tests). Try it: `python3 -m intune_analyzer --input samples`.
+Run `pytest` (19 tests). Try it: `python3 -m intune_analyzer --input samples`.
 
 ---
 
@@ -76,6 +77,15 @@ Run `pytest` (18 tests). Try it: `python3 -m intune_analyzer --input samples`.
   (`test_html_escapes_content`). Keep it green.
 - **L5 — Health score is cumulative penalty, clamped 0–100.** A heavily-seeded
   device can hit 0; that's expected. Weights live in `models.AnalysisResult.health_score`.
+- **L6 — Platform SSO shares a `com.microsoft.*` container with Office.** The
+  Enterprise SSO extension log lives under
+  `com.microsoft.CompanyPortalMac.ssoextension/...`, which the Office matcher
+  (`"com.microsoft." in base`) would otherwise claim. `psso` is therefore
+  registered **before** `office` in `REGISTRY`, and the `psso` matcher uses
+  *specific* tokens (`ssoextension`, `appsso`, `platformsso`, `psso`, …) rather
+  than the broad container prefix. PSSO is **not** in `EXPECTED_SOURCES` — it is
+  optional (only orgs that deploy it have logs), so absence must not raise a
+  `NODATA-PSSO` coverage finding.
 
 ---
 
@@ -111,6 +121,32 @@ accept PRs — file feedback via Feedback Assistant). Repo layout: `mdm/`
   `declarative/status/softwareupdate.failure-reason.yaml` (fields: `count`,
   `reason`, `timestamp`).
 
+**Platform SSO (PSSO) — grounded in Microsoft Learn, not the Apple schema.**
+PSSO is delivered by the **Microsoft Enterprise SSO extension** inside the
+Company Portal app (`com.microsoft.CompanyPortalMac.ssoextension`, team
+`UBF8T346G9`) and configured by an Intune settings-catalog Extensible-SSO
+profile. Parser `parsers/psso.py` (`Source.PSSO`) reads two surfaces: the broker
+log `SSOExtension.log` (Company Portal *Help > Save diagnostic report*, or live
+under `…/ssoextension/Data/Library/Caches/Logs/Microsoft/SSOExtension/`) and
+Apple `com.apple.AppSSO`/`PlatformSSO` unified-log exports (`AppSSOAgent`,
+`AppSSODaemon`, `swcd`; `app-sso platform -s` for state). Rules added:
+- `PSSO-REGISTER-FAIL` — registration / device-join failures, re-registration prompts.
+- `PSSO-CONFIG-CORRUPT` — `com.apple.PlatformSSO Code=-1001 "Error deserializing
+  device config."`, the macOS 15 Sequoia AppSSOAgent/AppSSODaemon concurrency bug
+  that triggers a re-registration loop (Apple fix in 15.3).
+- `PSSO-PAYLOAD-MISCONFIG` — SSOe payload errors `10001` (missing/inapplicable
+  setting) and `10002` (multiple conflicting SSO profiles).
+- `PSSO-EXTENSION-INACTIVE` — extension not launched: `PlugInKit Code=16 "other
+  version in use"` / tag `4s8qh` (macOS 15.3/iOS 18.1.1), or `invalid team
+  identifier` when SIP is disabled.
+- `PSSO-PRT-TOKEN` — Primary Refresh Token acquire/refresh failures.
+- `PSSO-ASSOCIATED-DOMAIN` — `swcd`/`swcutil`/app-site-association failures, the
+  classic symptom of TLS inspection breaking PSSO.
+- `PSSO-PASSWORD-SYNC` — Entra↔local password-sync failures (passcode-complexity
+  mismatch, per-user MFA, temporary passwords).
+Plus `OPP-PSSO-METHOD` (INFO) suggesting Secure Enclave / passkey + Keyvault
+recovery when PSSO logs are present.
+
 **Known gaps / future work:**
 - We parse **text logs**, not DDM **status-report JSON**. Intune increasingly
   uses Declarative Device Management; a dedicated parser for DDM status reports
@@ -141,6 +177,20 @@ accept PRs — file feedback via Feedback Assistant). Repo layout: `mdm/`
 - macOS LOB apps not deployed (CFBundleVersion / install-location requirement):
   <https://learn.microsoft.com/troubleshoot/mem/intune/app-management/macos-lob-apps-not-deployed>
 - Set up macOS enrollment: <https://learn.microsoft.com/intune/intune-service/enrollment/macos-enroll>
+- Microsoft Enterprise SSO extension troubleshooting (confirms SSO extension log
+  path `~/Library/Containers/com.microsoft.CompanyPortalMac.ssoextension/Data/
+  Library/Caches/Logs/Microsoft/SSOExtension/`, `SSOExtension.log`, SIP/team-id
+  errors, associated-domain/TLS failures, PlugInKit `4s8qh`):
+  <https://learn.microsoft.com/entra/identity/devices/troubleshoot-mac-sso-extension-plugin>
+- macOS Platform SSO known issues & troubleshooting (`app-sso platform -s`,
+  `com.apple.AppSSO` debug logging, Code=-1001 config-corruption loop, password
+  sync, per-user MFA): <https://learn.microsoft.com/entra/identity/devices/troubleshoot-macos-platform-single-sign-on-extension>
+- Configure Platform SSO for macOS in Intune (settings-catalog profile, error
+  codes 10001/10002, auth methods, Keyvault recovery):
+  <https://learn.microsoft.com/intune/device-configuration/settings-catalog/configure-platform-sso-macos>
+- Microsoft Enterprise SSO plug-in for Apple devices (extension identifier
+  `com.microsoft.CompanyPortalMac.ssoextension (UBF8T346G9)`, feature flags):
+  <https://learn.microsoft.com/entra/identity-platform/apple-sso-plugin>
 - Defender for Endpoint on macOS — resources (`mdatp health`,
   `/Library/Logs/Microsoft/mdatp/`, diagnostic/quarantine paths):
   <https://learn.microsoft.com/defender-endpoint/mac-resources>

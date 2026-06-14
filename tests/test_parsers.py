@@ -2,7 +2,7 @@ import datetime as dt
 
 from intune_analyzer.models import Level, Source
 from intune_analyzer.parsers import base, parse_file, select
-from intune_analyzer.parsers import defender, install, intune
+from intune_analyzer.parsers import defender, install, intune, office, psso
 
 
 def test_timestamp_formats():
@@ -30,6 +30,19 @@ def test_parser_selection_by_directory():
     assert select("/Library/Logs/Microsoft/mdatp/install.log") is defender
     assert select("/var/log/install.log") is install
     assert select("/Library/Logs/Microsoft/Intune/IntuneMDMAgent x.log") is intune
+
+
+def test_psso_parser_selection():
+    # The SSO extension log routes to the PSSO parser, not Office, even though
+    # it lives under a com.microsoft.* container.
+    assert select(
+        "/Users/x/Library/Containers/com.microsoft.CompanyPortalMac."
+        "ssoextension/Data/Library/Caches/Logs/Microsoft/SSOExtension/"
+        "SSOExtension.log") is psso
+    # AppSSO / PlatformSSO unified-log exports also route to PSSO.
+    assert select("/x/logs/com.apple.AppSSO.log") is psso
+    # A plain Office container log is still Office.
+    assert select("/x/com.microsoft.Word/Word.log") is office
 
 
 def test_parse_generic_continuation():
