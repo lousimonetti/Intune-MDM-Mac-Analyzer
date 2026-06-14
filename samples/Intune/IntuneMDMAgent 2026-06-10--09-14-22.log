@@ -1,0 +1,15 @@
+2026-06-10 09:14:22.014 | IntuneMDMAgent | 4821 | I | Agent starting, version 1.2026.10
+2026-06-10 09:14:23.220 | IntuneMDMAgent | 4821 | I | Beginning check-in with Intune service
+2026-06-10 09:14:24.880 | IntuneMDMAgent | 4821 | E | Failed to acquire token from AAD: AADSTS50076 multi-factor authentication required
+2026-06-10 09:14:25.001 | IntuneMDMAgent | 4821 | E | Failed to check in with service after 3 attempts (401 Unauthorized)
+2026-06-10 09:15:02.110 | IntuneMDMAgent | 4821 | I | Retrying check-in
+2026-06-10 09:15:08.540 | IntuneMDMAgent | 4821 | I | Check-in succeeded
+2026-06-10 09:15:09.300 | IntuneMDMAgent | 4821 | I | Evaluating assigned policies (4 targeted)
+2026-06-10 09:15:10.770 | IntuneMDMAgent | 4821 | W | Policy 'macOS-Firewall-Baseline' partially applied, 1 setting skipped
+2026-06-10 09:15:12.330 | IntuneMDMAgent | 4821 | E | Failed to apply configuration profile 'WiFi-Corp-SCEP': certificate request failed (SCEP server returned 500)
+2026-06-10 09:15:20.880 | IntuneMDMAgent | 4821 | I | Beginning app deployment evaluation (3 required apps)
+2026-06-10 09:15:30.120 | IntuneMDMAgent | 4821 | I | App 'Company Portal' already installed and current
+2026-06-10 09:15:45.660 | IntuneMDMAgent | 4821 | E | Application install failed for 'Acme VPN Client': downgrade not supported, newer version already installed
+2026-06-10 09:16:01.900 | IntuneMDMAgent | 4821 | I | Device compliance evaluation started
+2026-06-10 09:16:03.220 | IntuneMDMAgent | 4821 | W | Device is not compliant: FileVault is not enabled
+2026-06-10 09:16:05.010 | IntuneMDMAgent | 4821 | I | Reporting status to service

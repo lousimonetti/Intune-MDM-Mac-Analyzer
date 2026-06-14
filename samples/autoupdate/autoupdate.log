@@ -1,0 +1,8 @@
+2026-06-10 08:00:01.220 | MAU | Microsoft AutoUpdate launched, channel Current
+2026-06-10 08:00:02.330 | MAU | Checking for updates for 5 registered applications
+2026-06-10 08:00:15.110 | MAU | Update available: Microsoft Word 16.86 -> 16.87
+2026-06-10 08:01:40.880 | MAU | Downloading Microsoft Word update package
+2026-06-10 08:03:22.540 | MAU | Download failed for Microsoft Word: network timeout contacting officecdn.microsoft.com
+2026-06-10 08:03:23.010 | MAU | Update check failed for 1 of 5 applications
+2026-06-10 08:05:00.220 | MAU | Microsoft Excel updated successfully to 16.87
+2026-06-10 08:05:30.330 | MAU | HowToCheck is set to Manual; automatic updates disabled by configuration

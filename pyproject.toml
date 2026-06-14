@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "intune-mdm-mac-analyzer"
+version = "1.0.0"
+description = "Analyze Intune, macOS, Defender, AutoUpdate and Office logs on managed Macs and produce enhanced HTML/PDF health reports."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Intune MDM Mac Analyzer contributors" }]
+keywords = ["intune", "mdm", "macos", "defender", "logs", "report"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: MacOS",
+  "Environment :: Console",
+  "Topic :: System :: Systems Administration",
+]
+# Core tool has ZERO required runtime dependencies (stdlib only).
+dependencies = []
+
+[project.optional-dependencies]
+# Headless PDF rendering. Without these the report still offers browser
+# "Save as PDF". wkhtmltopdf (if on PATH) is also supported with no pip install.
+pdf = ["weasyprint>=60"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+intune-analyzer = "intune_analyzer.cli:main"
+intune-analyzer-gui = "intune_analyzer.gui:launch"
+
+[project.gui-scripts]
+intune-analyzer-gui-app = "intune_analyzer.gui:launch"
+
+[tool.setuptools]
+packages = ["intune_analyzer", "intune_analyzer.parsers"]
+
+[tool.setuptools.package-data]
+intune_analyzer = ["templates/*"]
