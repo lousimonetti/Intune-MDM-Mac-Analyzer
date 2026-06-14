@@ -330,4 +330,66 @@ RULES: list[Rule] = [
                        "re-push the profile or re-enroll if it was removed.",
         category="MDM",
     ),
+
+    # ------------------------------------------------------------------ #
+    # Apple declarative device management (DDM) & account-driven enrollment.
+    # Signatures validated against apple/device-management schema:
+    #   declarative/status/app.managed.list.yaml
+    #   declarative/status/softwareupdate.failure-reason.yaml
+    #   mdm/errors/{well-known.failed,psso.required,unrecognized.device}.yaml
+    # ------------------------------------------------------------------ #
+    Rule(
+        id="MDM-ENROLL-WELLKNOWN",
+        source=None,
+        pattern=r"com\.apple\.(well-?known\.failed|psso\.required|"
+                r"unrecognized\.device)|well-?known.*(failed|403)|"
+                r"platform ?sso.*required|unrecognized device",
+        severity=Severity.HIGH,
+        title="Account-driven enrollment / service-discovery failure",
+        description="Apple reported a well-known service-discovery or "
+                    "Platform SSO error (e.g. com.apple.well-known.failed, "
+                    "psso.required). These block account-driven Intune "
+                    "enrollment.",
+        recommendation="Verify the organisation's service-discovery (.well-known) "
+                       "endpoint and, if required, that Platform SSO is "
+                       "registered before enrollment proceeds.",
+        category="Enrollment",
+        docs_url="https://developer.apple.com/documentation/devicemanagement",
+    ),
+    Rule(
+        id="DDM-APP-STATE",
+        source=None,
+        pattern=r"\b(prompting-for-login|prompting-for-management|"
+                r"managed-but-uninstalled)\b|app\b.*\bstate\b.*\bfailed\b",
+        severity=Severity.MEDIUM,
+        title="Managed app stuck awaiting user action",
+        description="A declaratively-managed app reported a state that needs "
+                    "user interaction or did not reach 'managed' (e.g. "
+                    "prompting-for-login, managed-but-uninstalled, failed).",
+        recommendation="Confirm the user is signed into the App Store / has a "
+                       "VPP licence assigned; for required apps verify the "
+                       "AppStoreID/BundleID and assignment.",
+        category="Apps",
+        docs_url="https://github.com/apple/device-management/blob/release/"
+                 "declarative/status/app.managed.list.yaml",
+    ),
+    Rule(
+        id="SWUPDATE-FAIL",
+        source=None,
+        pattern=r"software ?update.*(fail|failure|error)|"
+                r"softwareupdate.*failure-?reason|"
+                r"failed to (download|install).*(os|macos|os update)",
+        severity=Severity.MEDIUM,
+        title="macOS software update enforcement failures",
+        description="A managed macOS software update failed to download or "
+                    "install (DDM softwareupdate.failure-reason). Devices left "
+                    "on older OS builds drift out of compliance.",
+        recommendation="Check the update enforcement declaration/policy, free "
+                       "disk space, and network reachability to Apple's "
+                       "software-update servers.",
+        category="Updates",
+        docs_url="https://github.com/apple/device-management/blob/release/"
+                 "declarative/status/softwareupdate.failure-reason.yaml",
+    ),
 ]
+
