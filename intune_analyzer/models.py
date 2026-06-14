@@ -43,6 +43,7 @@ class Source(str, Enum):
     """The Microsoft/macOS subsystem a log line came from."""
 
     INTUNE = "Intune MDM Agent"
+    PSSO = "Platform SSO"
     INSTALL = "macOS App Install"
     DEFENDER = "Microsoft Defender"
     AUTOUPDATE = "Microsoft AutoUpdate"

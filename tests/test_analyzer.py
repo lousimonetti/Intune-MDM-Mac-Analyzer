@@ -18,7 +18,7 @@ def result():
 def test_all_sources_discovered(result):
     found = {s.source for s in result.summaries}
     for src in (Source.INTUNE, Source.DEFENDER, Source.AUTOUPDATE,
-                Source.OFFICE, Source.INSTALL):
+                Source.OFFICE, Source.INSTALL, Source.PSSO):
         assert src in found, f"missing {src}"
 
 
@@ -26,7 +26,9 @@ def test_key_findings_present(result):
     ids = {f.id for f in result.findings}
     for expected in {"INTUNE-AAD-TOKEN", "INTUNE-CHECKIN-FAIL",
                      "DEFENDER-UNHEALTHY", "DEFENDER-RTP-OFF",
-                     "MAU-UPDATE-FAIL", "OFFICE-ACTIVATION", "INSTALL-FAIL"}:
+                     "MAU-UPDATE-FAIL", "OFFICE-ACTIVATION", "INSTALL-FAIL",
+                     "PSSO-REGISTER-FAIL", "PSSO-CONFIG-CORRUPT",
+                     "PSSO-PRT-TOKEN"}:
         assert expected in ids, f"missing finding {expected}"
 
 

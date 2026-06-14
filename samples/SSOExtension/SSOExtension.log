@@ -1,0 +1,10 @@
+2026-06-10 09:18:00.102 [Info] [SSOExtension] Microsoft Enterprise SSO extension activated (bundle com.microsoft.CompanyPortalMac.ssoextension, team UBF8T346G9)
+2026-06-10 09:18:00.540 [Info] [PlatformSSO] Begin Platform SSO device registration for user user@contoso.com
+2026-06-10 09:18:01.330 [Error] [PlatformSSO] Platform SSO registration failed: server returned 400 (interaction_required)
+2026-06-10 09:18:02.880 [Error] [AppSSO] Error Domain=com.apple.PlatformSSO Code=-1001 "Error deserializing device config." UserInfo={NSLocalizedDescription=Error deserializing device config.}
+2026-06-10 09:18:03.110 [Warning] [PlatformSSO] Re-registration required; prompting user
+2026-06-10 09:18:05.220 [Error] [SSOExtension] Failed to acquire token: PRT is invalid or expired, falling back to interactive sign-in
+2026-06-10 09:18:07.640 [Error] [AppSSO] swcutil: associated domain validation failed for login.microsoftonline.com (TLS interception suspected)
+2026-06-10 09:18:09.900 [Error] [SSOExtension] 10001 misconfiguration in the SSOe payload: required AuthenticationMethod missing for macOS 14
+2026-06-10 09:18:12.300 [Info] [PlatformSSO] app-sso platform -s: Registration: Not Registered
+2026-06-10 09:18:15.010 [Warning] [PlatformSSO] Password synchronization failed: local passcode policy complexity exceeds Microsoft Entra password

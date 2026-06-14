@@ -36,6 +36,9 @@ LIVE_PATHS = [
     "/Library/Logs/Microsoft/mdatp",
     "/Library/Application Support/Microsoft/Defender",
     "/Library/Logs/Microsoft/autoupdate.log",
+    # Platform SSO / Microsoft Enterprise SSO extension log (Company Portal).
+    "~/Library/Containers/com.microsoft.CompanyPortalMac.ssoextension/Data/"
+    "Library/Caches/Logs/Microsoft/SSOExtension",
     "~/Library/Containers",  # Office app containers (filtered by parser)
     "/var/log/system.log",
 ]
@@ -179,6 +182,24 @@ class Collector:
                     file="<mdatp health>", raw=line,
                 ))
             self.result.notes.append("Captured `mdatp health` output.")
+
+        # app-sso platform -s (Platform SSO registration state) - turned into
+        # synthetic PSSO entries so the keyword rules can act on a device that
+        # is not registered or whose registration is broken.
+        out = _run(["app-sso", "platform", "-s"])
+        if out:
+            for line in out.splitlines():
+                low = line.lower()
+                lvl = Level.INFO
+                if any(k in low for k in ("error", "fail", "not registered",
+                                          "false")):
+                    lvl = Level.ERROR
+                self.result.entries.append(LogEntry(
+                    source=Source.PSSO, level=lvl,
+                    message=line.strip(), component="app-sso platform",
+                    file="<app-sso platform -s>", raw=line,
+                ))
+            self.result.notes.append("Captured `app-sso platform -s` output.")
 
 
 def _run(cmd: list[str]) -> Optional[str]:
