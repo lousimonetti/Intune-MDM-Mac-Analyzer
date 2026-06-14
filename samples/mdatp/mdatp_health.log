@@ -1,0 +1,11 @@
+2026-06-10 09:20:00.100 mdatp health check started
+healthy : false
+licensed : true
+engine_version : "1.1.24010.7"
+definitions_status : "out of date"
+real_time_protection_enabled : false
+real_time_protection_available : true
+network_protection_status : "stopped"
+edr_machine_id : "a91f..."
+2026-06-10 09:20:01.330 connectivity test failed for endpoint https://x.cp.wd.microsoft.com
+2026-06-10 09:20:05.220 threat detected: Trojan:MacOS/EICAR_Test_File quarantined successfully

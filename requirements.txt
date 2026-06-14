@@ -1,0 +1,10 @@
+# The analyzer core uses only the Python standard library.
+# These are OPTIONAL extras:
+#
+#   weasyprint  -> headless PDF export (`--pdf`). Without it, the HTML report
+#                  still includes a browser "Save as PDF" button.
+#   pytest      -> run the test suite.
+#
+# Install extras with:  pip install -e ".[pdf,dev]"
+weasyprint>=60 ; extra == "pdf"
+pytest>=7 ; extra == "dev"

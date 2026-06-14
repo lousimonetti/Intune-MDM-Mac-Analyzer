@@ -1,0 +1,5 @@
+2026-06-09 18:01:11 preinstall com.microsoft.wdav begin
+2026-06-09 18:01:12 [INFO] Checking existing installation
+2026-06-09 18:01:13 [INFO] Stopping running services
+2026-06-09 18:01:15 [ERROR] Downgrade from 101.24042.0004 to 101.23122.0005 is not supported
+2026-06-09 18:01:15 preinstall com.microsoft.wdav end (failed)

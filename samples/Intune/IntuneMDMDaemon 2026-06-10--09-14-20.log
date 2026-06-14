@@ -1,0 +1,4 @@
+2026-06-10 09:14:20.001 | IntuneMDMDaemon | 311 | I | Daemon launched
+2026-06-10 09:14:20.110 | IntuneMDMDaemon | 311 | I | MDM profile present and approved
+2026-06-10 09:14:21.330 | IntuneMDMDaemon | 311 | I | Scheduling agent check-in every 8 hours
+2026-06-10 09:30:00.220 | IntuneMDMDaemon | 311 | I | Health ping ok

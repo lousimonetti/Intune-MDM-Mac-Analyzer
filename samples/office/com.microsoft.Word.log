@@ -1,0 +1,5 @@
+2026-06-10 11:02:11.220 Word launch sequence started
+2026-06-10 11:02:12.330 Loading user identity from licensing cache
+2026-06-10 11:02:13.440 [ERROR] Office activation failed: no valid license found for user jdoe@contoso.com (ADAL token expired)
+2026-06-10 11:02:14.550 Falling back to reduced functionality mode
+2026-06-10 11:45:01.660 Word unexpectedly quit while saving document (crash report generated)

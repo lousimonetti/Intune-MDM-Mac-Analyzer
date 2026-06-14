@@ -1,0 +1,8 @@
+Jun 10 09:15:31 mac-fleet-014 installd[210]: PackageKit: Adding client PKInstallDaemonClient
+Jun 10 09:15:32 mac-fleet-014 installd[210]: PackageKit: Installing com.microsoft.CompanyPortal
+Jun 10 09:15:40 mac-fleet-014 installd[210]: PackageKit: Install completed successfully for com.microsoft.CompanyPortal
+Jun 10 09:15:44 mac-fleet-014 installd[210]: PackageKit: Installing com.acme.vpnclient
+Jun 10 09:15:45 mac-fleet-014 installd[210]: PackageKit: Install Failed: returned non-zero exit code 1 (preinstall script)
+Jun 10 09:15:45 mac-fleet-014 installd[210]: Installation failed for package com.acme.vpnclient
+Jun 10 10:02:11 mac-fleet-014 installd[210]: PackageKit: Installing com.microsoft.edgemac
+Jun 10 10:02:30 mac-fleet-014 installd[210]: PackageKit: Install completed successfully for com.microsoft.edgemac
