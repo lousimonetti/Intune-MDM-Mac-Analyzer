@@ -206,13 +206,17 @@ def launch() -> int:
 
         def render():
             sev = result.severity_counts()
+            cis_txt = ""
+            if result.cis is not None:
+                cis_txt = (f"   |   CIS L1 {result.cis.score()}% "
+                           f"({result.cis.status_label()})")
             summary.config(
                 text=f"Health {result.health_score()}/100 "
                      f"({result.health_grade()})   |   "
                      f"{result.total_files} files, {result.total_lines:,} lines, "
                      f"{result.total_errors} errors   |   "
                      f"crit {sev['critical']}  high {sev['high']}  "
-                     f"med {sev['medium']}  low {sev['low']}")
+                     f"med {sev['medium']}  low {sev['low']}{cis_txt}")
             for i, f in enumerate(result.findings):
                 tree.insert("", "end", iid=str(i),
                             values=(f.severity.value.upper(), f.source.value,
