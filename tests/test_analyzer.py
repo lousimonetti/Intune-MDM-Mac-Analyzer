@@ -145,6 +145,33 @@ def test_packagekit_hosted_team_is_low_not_high(tmp_path):
     assert by_id["INSTALL-TEAM-RESPONSIBILITY"].severity == Severity.LOW
 
 
+def test_mau_major_scan_noise_is_filtered(tmp_path):
+    # MAU's "scan for major (macOS) update" path queries the system
+    # softwareupdate framework and logs SUMacControllerError Code=7301
+    # ("nothing to offer") / "majorError" / "scan for major software update
+    # failed" when DDM is enforcing OS updates. Those lines must NOT inflate
+    # MAU-UPDATE-FAIL — but legitimate MAU CDN failures still must.
+    au = tmp_path / "autoupdate"
+    au.mkdir()
+    (au / "autoupdate.log").write_text(
+        "2026-06-15 12:00:01 [ERROR] MAU: majorError: Error Domain="
+        "SUMacControllerError Code=7301 \"scan for major software update "
+        "failed: no updates available\"\n"
+        "2026-06-15 12:00:02 [ERROR] MAU: scan for major software update "
+        "failed: ScanNoUpdateFound\n"
+        "2026-06-15 12:00:03 [ERROR] MAU: SUMacControllerError Code=7301\n"
+    )
+    res = run_analysis(input_path=str(au))
+    assert "MAU-UPDATE-FAIL" not in {f.id for f in res.findings}
+
+    # Belt-and-suspenders: a *real* MAU CDN failure must still fire.
+    (au / "autoupdate.log").write_text(
+        "2026-06-15 12:05:00 [ERROR] MAU: failed to download update for "
+        "Word: HTTP 500 from officecdn.microsoft.com\n")
+    res2 = run_analysis(input_path=str(au))
+    assert "MAU-UPDATE-FAIL" in {f.id for f in res2.findings}
+
+
 def test_since_hours_drops_old_dated_entries_keeps_undated(tmp_path):
     # Opt-in time window: dated entries older than the cutoff are dropped;
     # undated lines (e.g. multi-line continuations) are retained so keyword

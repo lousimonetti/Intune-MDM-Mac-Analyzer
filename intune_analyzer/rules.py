@@ -533,6 +533,18 @@ RULES: list[Rule] = [
         source=Source.AUTOUPDATE,
         pattern=r"(update|download).*(failed|error)|failed to (install|download) "
                 r"(the )?update|installation.*unsuccessful",
+        # MAU's "scan for major (macOS) update" path queries the system
+        # softwareupdate framework and logs ``SUMacControllerError Code=7301``
+        # / ``majorError`` / ``scan for major software update failed`` when
+        # the OS has nothing to offer. This is by-design noise — especially
+        # when macOS updates are enforced via Apple DDM (MAU isn't responsible
+        # for OS updates in that case). Strip these before the rule fires.
+        exclude_pattern=r"SUMacControllerError.*7301|"
+                        r"\bCode=7301\b|"
+                        r"\bmajorError\b|"
+                        r"scan for major.*update.*fail|"
+                        r"ScanNoUpdateFound|"
+                        r"no update (found|available)",
         severity=Severity.LOW,  # downgraded — MAU retries CDN errors itself
         title="Microsoft AutoUpdate transient download failures",
         description="Microsoft AutoUpdate logged one or more failed update "
@@ -553,9 +565,13 @@ RULES: list[Rule] = [
         category="Updates",
         false_positive_note=(
             "Error `-1100` is an HTTP 404 from the CDN — common when the "
-            "package has rolled to a newer build between MAU’s check and "
+            "package has rolled to a newer build between MAU's check and "
             "fetch. A single occurrence is normal; clusters of failures over "
-            "many days indicate a real connectivity or policy issue."),
+            "many days indicate a real connectivity or policy issue. "
+            "``SUMacControllerError Code=7301`` / ``majorError`` / ``scan for "
+            "major software update failed`` are MAU's macOS major-update "
+            "scan returning empty — expected when Apple DDM is enforcing OS "
+            "updates and already filtered out of this rule."),
     ),
     Rule(
         id="MAU-DISABLED",
