@@ -147,6 +147,15 @@ Run `pytest` (25 tests). Try it: `python3 -m intune_analyzer --input samples`.
      severity so we never mask a real outage (regressions:
      `test_defender_install_demoted_when_running`,
      `test_defender_install_stays_high_when_unhealthy`).
+  A third sub-pattern to keep in mind:
+  3. **Conditional Access "by-design" prompts are LOW, not HIGH.** The log
+     line `Token request with PRT requires user interaction: invalid_grant`
+     is emitted by the SSO broker when a CA policy (MFA, compliant-device,
+     Terms of Use, etc.) requires an interactive step. The PRT is intact;
+     the CA policy is working as intended. This is handled by
+     `PSSO-PRT-CA-INTERACTION` (LOW), which is `exclude_pattern`-d out of
+     `PSSO-PRT-TOKEN` (HIGH) so that genuine PRT failures are not masked and
+     intentional CA prompts do not inflate the critical/high count.
   When adding a new rule, ask both questions: *Is this a live failure, or a
   cosmetic / historical signal?* and *What other finding would prove the
   product is healthy now?* If the answer to the second is "this other rule
