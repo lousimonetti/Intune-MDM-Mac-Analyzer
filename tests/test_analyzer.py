@@ -145,6 +145,52 @@ def test_packagekit_hosted_team_is_low_not_high(tmp_path):
     assert by_id["INSTALL-TEAM-RESPONSIBILITY"].severity == Severity.LOW
 
 
+def test_apps_and_office_penalties_are_capped():
+    # Pile up enough Apps + Office findings to blow past the caps; the
+    # health score must still reflect *at most* APPS_PENALTY_CAP +
+    # OFFICE_PENALTY_CAP from these two groups combined.
+    from intune_analyzer.models import AnalysisResult, Finding, Severity, Source
+    apps_findings = [
+        Finding(id=f"APP-{i}", severity=Severity.HIGH, source=Source.INTUNE,
+                title="x", description="x", recommendation="x",
+                category="Apps")
+        for i in range(5)  # 5 * 12 = 60 raw, capped to 15
+    ]
+    office_findings = [
+        Finding(id=f"OFF-{i}", severity=Severity.MEDIUM, source=Source.OFFICE,
+                title="x", description="x", recommendation="x",
+                category="Licensing")
+        for i in range(4)  # 4 * 5 = 20 raw, capped to 8
+    ]
+    res = AnalysisResult(findings=apps_findings + office_findings)
+    # Capped total penalty = 15 + 8 = 23; score = 100 - 23 = 77.
+    assert res.health_score() == 77
+
+
+def test_intune_app_install_fail_extracts_app_names(tmp_path):
+    # The finding must identify *which* apps are failing, not just say
+    # "something failed". Names are extracted from quoted tokens in the
+    # Intune agent log.
+    intune = tmp_path / "Intune"
+    intune.mkdir()
+    (intune / "IntuneMDMAgent.log").write_text(
+        "2026-06-10 09:15:45.660 | IntuneMDMAgent | 4821 | E | "
+        "Application install failed for 'Acme VPN Client': "
+        "downgrade not supported, newer version already installed\n"
+        "2026-06-10 09:16:01.110 | IntuneMDMAgent | 4821 | E | "
+        "Application install failed for 'Globex Antivirus': "
+        "package download failed\n"
+        "2026-06-10 09:16:30.500 | IntuneMDMAgent | 4821 | E | "
+        "Application install failed for 'Acme VPN Client': retrying\n")
+    res = run_analysis(input_path=str(intune))
+    by_id = {f.id: f for f in res.findings}
+    assert "INTUNE-APP-INSTALL-FAIL" in by_id
+    finding = by_id["INTUNE-APP-INSTALL-FAIL"]
+    assert finding.subject_label == "Apps"
+    # Two distinct apps, deduplicated, order preserved.
+    assert finding.impacted == ["Acme VPN Client", "Globex Antivirus"]
+
+
 def test_ignore_flag_suppresses_finding(tmp_path):
     mdatp = tmp_path / "mdatp"
     mdatp.mkdir()

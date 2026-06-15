@@ -207,6 +207,18 @@ def _findings_section(result: AnalysisResult, client_facing: bool) -> str:
                         f"{ev_items}</details>")
         count_badge = (f"<span class='count'>×{f.count}</span>"
                        if f.count > 1 and not client_facing else "")
+        # Impacted subjects (e.g. specific app names) — shown as a chip row
+        # so the reader sees *which* apps are failing without expanding
+        # the raw evidence.
+        impacted_html = ""
+        impacted = getattr(f, "impacted", []) or []
+        if impacted:
+            label = getattr(f, "subject_label", "") or "Items"
+            chips = "".join(f"<span class='chip'>{_e(s)}</span>"
+                            for s in impacted)
+            impacted_html = (
+                f"<p class='impacted'><b>{_e(label)} affected "
+                f"({len(impacted)}):</b> {chips}</p>")
         # Ordered remediation steps.
         steps_html = ""
         steps = getattr(f, "remediation_steps", []) or []
@@ -245,6 +257,7 @@ def _findings_section(result: AnalysisResult, client_facing: bool) -> str:
   </div>
   <h3>{_e(f.title)}</h3>
   <p class="desc">{_e(f.description)}</p>
+  {impacted_html}
   <p class="rec"><b>Recommended action:</b> {_e(f.recommendation)}</p>
   {steps_html}
   {fp_html}
@@ -545,6 +558,11 @@ section, footer { background:var(--panel); margin:1rem auto; padding:1.4rem 1.8r
   border-radius:5px; }
 .count { margin-left:auto; color:var(--muted); font-weight:600; }
 .desc { margin:.3rem 0; }
+.impacted { margin:.3rem 0 .5rem; font-size:.9rem; }
+.impacted .chip { display:inline-block; background:#fff3bf; color:#5c4400;
+  border:1px solid #f1d260; padding:.05rem .45rem; border-radius:5px;
+  margin:.1rem .25rem .1rem 0; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:.82rem; }
 .rec { margin:.3rem 0; background:#f1f8ff; border:1px solid #d0e2ff;
   padding:.5rem .7rem; border-radius:8px; }
 .evidence { margin-top:.6rem; } .evidence summary { cursor:pointer; color:var(--accent);

@@ -59,6 +59,16 @@ class Rule:
     transient: bool = False
     remediation_steps: tuple[str, ...] = field(default_factory=tuple)
     false_positive_note: str = ""
+    # ``subject_pattern``: a regex with one capture group that pulls the
+    #                      thing the rule is about (an app name, a policy
+    #                      ID, a profile) out of each matching log line.
+    #                      Distinct values are de-duplicated and surfaced on
+    #                      the finding so the report can say *which* app or
+    #                      policy is failing, not just "something failed".
+    # ``subject_label``  : short noun for the report header (e.g. "Apps",
+    #                      "Policies", "Profiles").
+    subject_pattern: str = ""
+    subject_label: str = ""
 
     def regex(self) -> re.Pattern:
         return re.compile(self.pattern, self.flags)
@@ -69,6 +79,10 @@ class Rule:
     def exclude_regex(self) -> re.Pattern | None:
         return (re.compile(self.exclude_pattern, self.flags)
                 if self.exclude_pattern else None)
+
+    def subject_regex(self) -> re.Pattern | None:
+        return (re.compile(self.subject_pattern, self.flags)
+                if self.subject_pattern else None)
 
 
 D = "https://learn.microsoft.com"
@@ -221,6 +235,12 @@ RULES: list[Rule] = [
         source=Source.INTUNE,
         pattern=r"(app|application|package).*(install|deployment).*(fail|error)|"
                 r"failed to (install|download).*(app|pkg|package)",
+        # Intune agent logs the app name as a quoted token, typically after
+        # "for" (e.g. ``Application install failed for 'Acme VPN Client':``).
+        # We capture quoted strings of 1-80 chars so the report can list the
+        # specific apps instead of just the generic failure title.
+        subject_pattern=r"['\"]([^'\"\n]{1,80})['\"]",
+        subject_label="Apps",
         severity=Severity.HIGH,
         title="Intune-managed app install failures",
         description="The agent failed to install or download one or more "

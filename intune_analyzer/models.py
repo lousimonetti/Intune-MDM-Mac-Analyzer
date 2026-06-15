@@ -94,6 +94,12 @@ class Finding:
     # network errors); the CIS evaluator demotes these so a healthy baseline
     # is not scored down by a one-off retry.
     transient: bool = False
+    # Distinct subjects extracted from the matching log lines — typically
+    # app names, policy IDs or profile names — so the report can say *which*
+    # things are failing, not just that something failed.
+    impacted: list[str] = field(default_factory=list)
+    # Short noun describing what ``impacted`` contains (e.g. "Apps").
+    subject_label: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -274,11 +280,24 @@ class AnalysisResult:
             counts[f.severity.value] += 1
         return counts
 
+    # Per-category caps on the total health-score impact (in penalty points,
+    # i.e. percentage points off the 100-point health score). App-install and
+    # Office findings can pile up and drown out higher-priority signals (a
+    # broken Defender, a failing enrolment) so their combined contribution is
+    # capped — any excess is dropped, not redistributed.
+    APPS_PENALTY_CAP = 15
+    OFFICE_PENALTY_CAP = 8
+
     def health_score(self) -> int:
         """A 0-100 health score. 100 == clean, penalised by findings.
 
         Weighting roughly mirrors operational impact; the score is clamped
         to the 0-100 range so the report can render it as a gauge.
+
+        Two per-group caps are applied so noisy product areas can't dominate
+        the score: all ``category="Apps"`` findings together contribute at
+        most :data:`APPS_PENALTY_CAP` points, and all Office findings together
+        contribute at most :data:`OFFICE_PENALTY_CAP` points.
         """
         weights = {
             Severity.CRITICAL: 25,
@@ -287,7 +306,20 @@ class AnalysisResult:
             Severity.LOW: 2,
             Severity.INFO: 0,
         }
-        penalty = sum(weights[f.severity] for f in self.findings)
+        apps_penalty = 0
+        office_penalty = 0
+        other_penalty = 0
+        for f in self.findings:
+            w = weights[f.severity]
+            if f.category == "Apps":
+                apps_penalty += w
+            elif f.source == Source.OFFICE:
+                office_penalty += w
+            else:
+                other_penalty += w
+        penalty = (min(apps_penalty, self.APPS_PENALTY_CAP)
+                   + min(office_penalty, self.OFFICE_PENALTY_CAP)
+                   + other_penalty)
         return max(0, min(100, 100 - penalty))
 
     def health_grade(self) -> str:

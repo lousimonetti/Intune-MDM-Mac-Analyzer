@@ -86,6 +86,7 @@ class Analyzer:
             rx = rule.regex()
             file_rx = rule.file_regex()
             excl_rx = rule.exclude_regex()
+            subj_rx = rule.subject_regex()
             matches = []
             for e in entries:
                 if rule.source is not None and e.source != rule.source:
@@ -112,6 +113,22 @@ class Analyzer:
                     snippet = snippet[:197] + "..."
                 loc = f" [{e.file.split('/')[-1]}:{e.line_no}]" if e.file else ""
                 evidence.append(f"{ts}{loc}  {snippet}")
+            # Extract distinct subjects (app/policy/profile names) from the
+            # full match set — not just the evidence sample — so the report
+            # lists every impacted item even when the evidence is truncated.
+            impacted: list[str] = []
+            if subj_rx is not None:
+                seen: set[str] = set()
+                for e in matches:
+                    hay = e.raw or e.message
+                    m = subj_rx.search(hay)
+                    if not m:
+                        continue
+                    name = m.group(1).strip()
+                    if not name or name in seen:
+                        continue
+                    seen.add(name)
+                    impacted.append(name)
             out.append(Finding(
                 id=rule.id,
                 severity=rule.severity,
@@ -126,6 +143,8 @@ class Analyzer:
                 remediation_steps=list(rule.remediation_steps),
                 false_positive_note=rule.false_positive_note,
                 transient=rule.transient,
+                impacted=impacted,
+                subject_label=rule.subject_label,
             ))
         return out
 
