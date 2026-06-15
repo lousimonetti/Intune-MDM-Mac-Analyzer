@@ -144,6 +144,11 @@ def _print_console_summary(result) -> None:
     print(f"  Findings     : {len(result.findings)}  "
           f"(crit {sev['critical']}, high {sev['high']}, "
           f"med {sev['medium']}, low {sev['low']}, info {sev['info']})")
+    if result.cis is not None:
+        cis = result.cis
+        print(f"  CIS Level 1  : {cis.score()}% match "
+              f"({cis.status_label()}) — {cis.passed} pass / {cis.failed} fail "
+              f"/ {cis.not_assessed} n/a")
     print("-" * 60)
     for f in result.findings:
         if f.severity in (Severity.INFO,):

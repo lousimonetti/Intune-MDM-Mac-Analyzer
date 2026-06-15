@@ -1,10 +1,11 @@
 # Intune MDM Mac Analyzer
 
 Analyze the health of **Microsoft Intune** management on macOS devices by
-parsing the logs that matter — Intune MDM agent, macOS app installs, assigned
-policies, **Microsoft Defender for Endpoint**, **Microsoft AutoUpdate (MAU)**
-and **Microsoft Office** — and turn them into an **enhanced HTML health report**
-with one-click **PDF** export and a simplified **client-facing** mode.
+parsing the logs that matter — Intune MDM agent, **Platform SSO**, macOS app
+installs, assigned policies, **Microsoft Defender for Endpoint**, **Microsoft
+AutoUpdate (MAU)** and **Microsoft Office** — and turn them into an **enhanced
+HTML health report** with a **CIS Level 1 validation score**, one-click **PDF**
+export and a simplified **client-facing** mode.
 
 Runs as a **CLI** *or* a **GUI** from the same codebase. The core has **zero
 required dependencies** (Python standard library only), so it runs on the
@@ -97,6 +98,8 @@ A single, self-contained HTML file (inline CSS/SVG, **no external requests** —
 safe to email):
 
 - **Health score gauge** (0–100) and grade (Healthy → Critical)
+- **CIS Level 1 validation** KPI — a colour-banded match score (green ≥ 95%,
+  yellow 75–95%, red below) plus a per-control pass / fail / not-assessed table
 - **Summary cards** (files, lines, errors, warnings, findings)
 - **Findings by severity** bar + prioritised findings with **recommended
   actions**, doc links and collapsible **evidence** (raw log lines)
@@ -112,6 +115,32 @@ neither is present it writes the HTML and points you at the browser's built-in
 
 ---
 
+## CIS Level 1 validation
+
+The report includes an **evidence-based** validation against a curated subset of
+the [CIS Apple macOS Benchmark](https://www.cisecurity.org/benchmark/apple_os)
+**Level 1** controls — the essential, low-impact hardening baseline: software
+updates, FileVault, Gatekeeper, the application firewall, automatic login,
+auditing, password policy, screen lock, endpoint malware protection and MDM
+enforcement (`intune_analyzer/cis.py`).
+
+Each control resolves to **pass**, **fail**, or **not assessed** (no signal in
+the collected logs). The headline **validation score (KPI)** is the passing
+share of *assessable* controls — `pass / (pass + fail)` — so missing telemetry
+never dilutes it. The KPI is colour-banded:
+
+| Match score | Band |
+| --- | --- |
+| **≥ 95%** | 🟢 green (Pass) |
+| **75–95%** | 🟡 yellow (Partial) |
+| **< 75%** | 🔴 red (Fail) |
+
+The score and every control (with rationale, remediation and evidence) are also
+emitted under the `cis` key of the `--json` output. This is a fast alignment
+indicator, **not** a substitute for a full on-device CIS scan.
+
+---
+
 ## How it fits together
 
 ```
@@ -123,7 +152,8 @@ collector  ->  parsers/*  ->  analyzer (rules + heuristics)  ->  report (HTML/PD
 - `collector.py` — offline (dir/zip) or live (macOS paths + `mdatp health` + `app-sso platform -s`)
 - `parsers/` — forgiving, format-tolerant log parsing per source
 - `rules.py` — declarative detection signatures (easy to extend)
-- `analyzer.py` — collapses matches into findings, adds aggregate insight
+- `cis.py` — CIS Level 1 control specs + evidence-based validation / KPI scoring
+- `analyzer.py` — collapses matches into findings, adds aggregate insight, runs CIS validation
 - `report.py` — HTML / JSON / PDF rendering
 - `cli.py`, `gui.py` — two front ends over `pipeline.run_analysis`
 

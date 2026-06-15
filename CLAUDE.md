@@ -13,9 +13,9 @@ A Python tool that analyzes the logs that govern **Microsoft Intune management
 of macOS devices** — Intune MDM agent, **Platform SSO / Microsoft Enterprise SSO
 extension**, macOS app installs, assigned policies, **Microsoft Defender for
 Endpoint**, **Microsoft AutoUpdate (MAU)** and **Microsoft Office** — and
-produces an **enhanced, self-contained HTML report** with **PDF** and
-**client-facing** export. It runs as both a **CLI** and a **GUI** from one
-shared engine.
+produces an **enhanced, self-contained HTML report** — including a **CIS Level 1
+validation score (KPI)** — with **PDF** and **client-facing** export. It runs as
+both a **CLI** and a **GUI** from one shared engine.
 
 Design tenets (do not regress these):
 - **Stdlib-only core.** No required third-party dependency. `weasyprint` is an
@@ -40,7 +40,8 @@ collector  ->  parsers/*  ->  rules + analyzer  ->  report (HTML/PDF/JSON)
 | `parsers/*.py` | One module per source; each exposes `NAME`, `SOURCE`, `matches()`, `parse()`. |
 | `parsers/__init__.py` | `select()` dispatch — **matches on filename + immediate parent dir only** (see Lesson L1). |
 | `rules.py` | Declarative `Rule` signatures (the domain knowledge). |
-| `analyzer.py` | Collapses rule matches into `Finding`s + aggregate heuristics + health score. |
+| `cis.py` | CIS Level 1 control specs + evidence-based validation → `CISReport` (match-score KPI). |
+| `analyzer.py` | Collapses rule matches into `Finding`s + aggregate heuristics + health score; runs `cis.evaluate`. |
 | `report.py` | HTML / JSON / PDF renderers. PDF tries weasyprint -> wkhtmltopdf -> browser fallback. |
 | `cli.py` / `gui.py` | Front ends. |
 | `models.py` | Dataclasses (`LogEntry`, `Finding`, `SourceSummary`, `AnalysisResult`). |
@@ -49,7 +50,7 @@ collector  ->  parsers/*  ->  rules + analyzer  ->  report (HTML/PDF/JSON)
 new module in `parsers/` + register in `REGISTRY` (order matters; most specific
 first, `install` is the catch-all for `*install.log`).
 
-Run `pytest` (19 tests). Try it: `python3 -m intune_analyzer --input samples`.
+Run `pytest` (25 tests). Try it: `python3 -m intune_analyzer --input samples`.
 
 ---
 
@@ -86,6 +87,16 @@ Run `pytest` (19 tests). Try it: `python3 -m intune_analyzer --input samples`.
   than the broad container prefix. PSSO is **not** in `EXPECTED_SOURCES` — it is
   optional (only orgs that deploy it have logs), so absence must not raise a
   `NODATA-PSSO` coverage finding.
+- **L7 — CIS validation is log-evidence-based, three-state, and the KPI ignores
+  unknowns.** `cis.evaluate` resolves each control to `pass` / `fail` /
+  `not-assessed`; we can only judge controls the collected logs carry a signal
+  for. The **match-score KPI = pass / (pass + fail)** so `not-assessed` controls
+  never dilute it (`CISReport.score`). Banding is fixed by requirement: **≥ 95
+  green, 75–95 yellow, < 75 red** (`CISReport.status`); 95 is green (inclusive
+  lower bound of the top band). CIS runs on the **full** finding set *before* the
+  client-facing INFO trim so the KPI is identical in technical and client modes
+  (regression: `test_analysis_result_has_cis_and_client_mode_matches`). It is
+  **not** a substitute for a full on-device CIS scan — say so in any output.
 
 ---
 
@@ -147,6 +158,30 @@ Apple `com.apple.AppSSO`/`PlatformSSO` unified-log exports (`AppSSOAgent`,
 Plus `OPP-PSSO-METHOD` (INFO) suggesting Secure Enclave / passkey + Keyvault
 recovery when PSSO logs are present.
 
+**CIS Level 1 validation (`cis.py`) — grounded in the CIS Apple macOS
+Benchmark.** A curated, log-evidence-based subset of **CIS Level 1** controls
+(the essential, low-impact hardening baseline). Each `CISCheck` is declarative:
+`fail_findings` (finding IDs that mean fail), `fail_pattern`/`pass_pattern`
+(regexes over log lines), and `pass_if_source` (governing source present + no
+contrary signal ⇒ pass). Resolution order: fail → positive pass → source-present
+pass → not-assessed. Controls implemented (numbers track CIS, shift per OS/bench
+version, so indicative):
+- `CIS-1.1` Apple software current · `CIS-1.2` automatic app updates (MAU).
+- `CIS-2.5.1` FileVault · `CIS-2.5.2` Gatekeeper · `CIS-2.5.3` application
+  firewall · `CIS-2.11` disable automatic login.
+- `CIS-3.1` security auditing (auditd).
+- `CIS-5.2` password/passcode policy · `CIS-5.8` screen-lock password.
+- `CIS-6.3` endpoint malware protection (Defender healthy).
+- `CIS-MDM` device enrolled & managed (foundation; without it nothing is
+  enforceable).
+The map ties CIS to our existing signals (e.g. `DEFENDER-*` → `CIS-6.3`,
+`MDM-ENROLL-WELLKNOWN`/`INTUNE-ENROLL-FAIL` → `CIS-MDM`, the
+`FileVault is not enabled` compliance line → `CIS-2.5.1`). Exposed in HTML (KPI
+ring + per-control table), the CLI summary line, the GUI status bar, and the
+`cis` key of `--json`. **Future work:** when DDM status-report JSON or the MDM
+error envelope is parsed, add structured CIS controls (firewall/Gatekeeper
+state, audit config) instead of relying on log-text signals.
+
 **Known gaps / future work:**
 - We parse **text logs**, not DDM **status-report JSON**. Intune increasingly
   uses Declarative Device Management; a dedicated parser for DDM status reports
@@ -202,6 +237,14 @@ recovery when PSSO logs are present.
   `com.microsoft.autoupdate2.plist`): <https://learn.microsoft.com/defender-endpoint/mac-privacy>
 - Defender client analyzer on macOS (report.html precedent): <https://learn.microsoft.com/defender-endpoint/run-analyzer-macos>
 - SCEP / PKCS certificate troubleshooting: <https://learn.microsoft.com/troubleshoot/mem/intune/certificates/troubleshoot-scep-certificate-profiles>
+- Secure your macOS endpoints (Intune FileVault / firewall / Gatekeeper / update
+  enforcement; the controls the CIS validation maps to): <https://learn.microsoft.com/intune/solutions/end-to-end-guides/macos-endpoints-get-started>
+- macOS endpoint protection settings reference (FileVault / firewall / Gatekeeper
+  payloads): <https://learn.microsoft.com/intune/device-configuration/endpoint-security/ref-endpoint-protection-macos>
+
+### CIS (Center for Internet Security)
+- CIS Apple macOS Benchmarks (Level 1 / Level 2 hardening controls; the basis
+  for `cis.py`): <https://www.cisecurity.org/benchmark/apple_os>
 
 ---
 

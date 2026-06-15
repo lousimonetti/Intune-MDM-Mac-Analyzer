@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime as _dt
 
+from . import cis as cis_module
 from .collector import CollectionResult
 from .models import (AnalysisResult, Finding, Level, Severity, Source,
                      SourceSummary)
@@ -45,6 +46,11 @@ class Analyzer:
         findings.extend(self._aggregate(result))
         # Sort: highest severity first, then by count desc.
         findings.sort(key=lambda f: (-f.severity.rank, -f.count, f.id))
+        # CIS Level 1 validation runs on the full finding set (before the
+        # client-facing trim) so the KPI is identical in both modes.
+        result.cis = cis_module.evaluate(
+            findings, result.entries,
+            {s.source for s in result.summaries})
         if self.client_facing:
             findings = [f for f in findings if f.severity != Severity.INFO]
         result.findings = findings

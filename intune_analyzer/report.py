@@ -65,6 +65,9 @@ def render_html(result: AnalysisResult, *, client_facing: bool = False,
              _summary_cards(result, sev_counts),
              _severity_bar(sev_counts)]
 
+    if result.cis is not None:
+        parts.append(_cis_section(result, client_facing))
+
     if client_facing:
         parts.append(_exec_summary(result))
 
@@ -246,6 +249,75 @@ def _sources_section(result: AnalysisResult) -> str:
 </table></section>"""
 
 
+CIS_STATUS_COLORS = {"green": "#2f9e44", "yellow": "#f08c00", "red": "#b00020"}
+CIS_CHECK_COLORS = {"pass": "#2f9e44", "fail": "#b00020", "not-assessed": "#94a3b8"}
+CIS_CHECK_LABELS = {"pass": "PASS", "fail": "FAIL", "not-assessed": "N/A"}
+
+
+def _cis_section(result: AnalysisResult, client_facing: bool) -> str:
+    cis = result.cis
+    color = CIS_STATUS_COLORS.get(cis.status(), "#94a3b8")
+    score = cis.score()
+    assessed_note = (f"{cis.passed} of {cis.assessed} assessable controls pass"
+                     if cis.assessed else "No controls could be assessed from "
+                     "the collected logs")
+
+    kpi = f"""
+<div class="cis-kpi">
+  <div class="cis-score" style="border-color:{color};color:{color}">
+    <span class="cis-pct">{score}%</span>
+    <span class="cis-band">{_e(cis.status_label())}</span>
+  </div>
+  <div class="cis-meta">
+    <p class="cis-headline">CIS Level 1 match: <b style="color:{color}">{score}%</b></p>
+    <p class="hint">{_e(assessed_note)}. Banding: ≥ 95% green · 75–95% yellow · &lt; 75% red.</p>
+    <div class="cis-counts">
+      <span class="cis-c pass">✓ {cis.passed} pass</span>
+      <span class="cis-c fail">✗ {cis.failed} fail</span>
+      <span class="cis-c na">— {cis.not_assessed} not assessed</span>
+      <span class="cis-c tot">{cis.total} controls</span>
+    </div>
+  </div>
+</div>"""
+
+    rows = []
+    for c in cis.checks:
+        ccol = CIS_CHECK_COLORS[c.status]
+        clabel = CIS_CHECK_LABELS[c.status]
+        evidence = ""
+        if c.evidence and not client_facing:
+            ev_items = "".join(f"<pre class='ev'>{_e(s)}</pre>" for s in c.evidence)
+            evidence = (f"<details class='evidence'><summary>Evidence &amp; "
+                        f"remediation</summary>"
+                        f"<p class='rec'><b>Remediation:</b> {_e(c.remediation)}</p>"
+                        f"{ev_items}</details>")
+        elif not client_facing:
+            evidence = (f"<details class='evidence'><summary>Remediation</summary>"
+                        f"<p class='rec'>{_e(c.remediation)}</p></details>")
+        docs = (f" <a href='{_e(c.docs_url)}' target='_blank' rel='noopener'>↗</a>"
+                if c.docs_url else "")
+        rows.append(f"""
+<tr>
+  <td class="cis-id">{_e(c.id)}{docs}</td>
+  <td><b>{_e(c.title)}</b><div class="cis-rat">{_e(c.rationale)}</div>{evidence}</td>
+  <td class="cis-sec">{_e(c.section)}</td>
+  <td class="cis-st"><span class="cis-pill" style="background:{ccol}">{clabel}</span></td>
+</tr>""")
+
+    table = f"""
+<table class="cistable">
+  <thead><tr><th>Control</th><th>Title</th><th>Section</th><th>Status</th></tr></thead>
+  <tbody>{''.join(rows)}</tbody>
+</table>"""
+
+    return (f"<section class='cis'><h2>CIS Level 1 validation</h2>{kpi}{table}"
+            "<p class='hint'>Evidence-based validation against a curated subset "
+            "of CIS Apple macOS Benchmark <b>Level 1</b> controls. Controls "
+            "without a signal in the collected logs are reported as "
+            "<em>not assessed</em> and excluded from the match score — this is "
+            "not a substitute for a full on-device CIS scan.</p></section>")
+
+
 def _coverage_section(result: AnalysisResult) -> str:
     found = {s.source for s in result.summaries}
     all_sources = list(Source)
@@ -398,6 +470,30 @@ table.srctable { width:100%; border-collapse:collapse; font-size:.9rem; }
   border-bottom:1px solid var(--line); }
 .srctable .num { text-align:right; } .srctable .err { color:#e8590c; font-weight:600; }
 .srctable .warn { color:#f08c00; }
+.cis-kpi { display:flex; gap:1.4rem; align-items:center; flex-wrap:wrap;
+  margin-bottom:1rem; }
+.cis-score { display:flex; flex-direction:column; align-items:center;
+  justify-content:center; width:128px; height:128px; border:8px solid;
+  border-radius:50%; flex:0 0 auto; }
+.cis-pct { font-size:2rem; font-weight:800; line-height:1; }
+.cis-band { font-size:.8rem; font-weight:700; text-transform:uppercase;
+  letter-spacing:.04em; margin-top:.2rem; }
+.cis-meta { flex:1; min-width:240px; }
+.cis-headline { font-size:1.05rem; margin:0 0 .3rem; }
+.cis-counts { display:flex; flex-wrap:wrap; gap:.5rem; margin-top:.5rem; }
+.cis-c { font-size:.8rem; padding:.2rem .6rem; border-radius:999px;
+  background:#f1f5f9; color:var(--muted); font-weight:600; }
+.cis-c.pass { background:#e6f4ea; color:#2f9e44; }
+.cis-c.fail { background:#fdecec; color:#b00020; }
+table.cistable { width:100%; border-collapse:collapse; font-size:.88rem; }
+.cistable th,.cistable td { text-align:left; padding:.5rem .6rem;
+  border-bottom:1px solid var(--line); vertical-align:top; }
+.cis-id { white-space:nowrap; font-weight:600; color:var(--muted); }
+.cis-sec { color:var(--muted); white-space:nowrap; font-size:.82rem; }
+.cis-rat { color:var(--muted); font-size:.82rem; margin-top:.2rem; }
+.cis-st { text-align:right; }
+.cis-pill { color:#fff; padding:.15rem .55rem; border-radius:5px;
+  font-weight:700; font-size:.74rem; letter-spacing:.03em; }
 .coverage { list-style:none; padding:0; display:grid;
   grid-template-columns:repeat(2,1fr); gap:.4rem; }
 .coverage li { padding:.4rem .6rem; border-radius:8px; background:#f8fafc; }
@@ -416,7 +512,8 @@ footer { color:var(--muted); font-size:.8rem; text-align:center; }
     print-color-adjust:exact; }
   section, footer, .topbar { box-shadow:none; max-width:100%; margin:.5rem 0;
     break-inside:avoid; }
-  .finding, .seg, .sevbar { -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  .finding, .seg, .sevbar, .cis-pill, .cis-score, .cis-c {
+    -webkit-print-color-adjust:exact; print-color-adjust:exact; }
   details.evidence { display:none; }
 }
 """
