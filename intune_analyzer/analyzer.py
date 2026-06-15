@@ -229,17 +229,39 @@ class Analyzer:
             total = max(summ.lines_parsed, 1)
             ratio = summ.errors / total
             if summ.errors >= 5 and ratio >= 0.15:
+                top_patterns = _top_error_patterns(result.entries,
+                                                   summ.source, n=5)
+                # Surface the top patterns as evidence so the user can see
+                # what is actually dominating the error stream instead of
+                # being told to "investigate".
+                evidence = [
+                    f"×{cnt:<4d}  {pat}" for pat, cnt in top_patterns
+                ]
+                dominant = top_patterns[0][0] if top_patterns else ""
+                dominant_share = (top_patterns[0][1] / summ.errors
+                                  if top_patterns else 0)
+                description = (
+                    f"{summ.errors} of {summ.lines_parsed} parsed lines "
+                    f"({ratio:.0%}) were errors.")
+                if dominant:
+                    description += (
+                        f" Dominant pattern accounts for "
+                        f"{dominant_share:.0%} of errors: \"{dominant}\".")
+                recommendation, steps = _errorrate_remediation(
+                    summ.source, dominant)
                 out.append(Finding(
                     id=f"ERRORRATE-{summ.source.name}",
                     severity=Severity.MEDIUM,
                     source=summ.source,
                     title=f"Elevated error rate in {summ.source.value}",
-                    description=f"{summ.errors} of {summ.lines_parsed} parsed "
-                                f"lines ({ratio:.0%}) were errors.",
-                    recommendation="Investigate the dominant error pattern; a "
-                                   "high sustained error rate usually points to "
-                                   "a single root cause worth fixing first.",
+                    description=description,
+                    recommendation=recommendation,
+                    remediation_steps=steps,
                     category="Reliability",
+                    evidence=evidence,
+                    count=summ.errors,
+                    impacted=[pat for pat, _ in top_patterns],
+                    subject_label="Top error patterns",
                     false_positive_note=(
                         "Office telemetry channels are emitted at "
                         "warning/error level by design (telemetry feature "
@@ -347,3 +369,174 @@ def _file_hint(path: str) -> str:
     base = os.path.basename(path)
     parent = os.path.basename(os.path.dirname(path)) if path else ""
     return f"{parent}/{base}".lstrip("/")
+
+
+# Patterns used to collapse near-duplicate error messages into a single
+# bucket. The goal is "the same error 50 times" → one pattern with count 50,
+# not 50 unique strings that only differ by ID/path/timestamp.
+_NORMALISE_NUMS = re.compile(r"\b0x[0-9a-fA-F]+\b|\b-?\d+(?:[.,]\d+)?\b")
+_NORMALISE_HEX = re.compile(r"\b[0-9a-fA-F]{8,}\b")
+_NORMALISE_PATHS = re.compile(r"(?:/[\w.\-]+){2,}")
+_NORMALISE_QUOTES = re.compile(r"['\"][^'\"\n]{1,80}['\"]")
+_NORMALISE_UUID = re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+                              r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
+
+
+def _normalise_message(msg: str) -> str:
+    """Collapse a log message into a comparable signature.
+
+    Replaces things that vary line-to-line (IDs, paths, timestamps, quoted
+    user-supplied strings) with placeholders so two semantically identical
+    errors share a bucket.
+    """
+    s = msg.strip()
+    s = _NORMALISE_UUID.sub("<UUID>", s)
+    s = _NORMALISE_PATHS.sub("<PATH>", s)
+    s = _NORMALISE_QUOTES.sub("<NAME>", s)
+    s = _NORMALISE_HEX.sub("<HEX>", s)
+    s = _NORMALISE_NUMS.sub("<N>", s)
+    # Squash repeated whitespace.
+    s = re.sub(r"\s+", " ", s)
+    if len(s) > 160:
+        s = s[:157] + "..."
+    return s
+
+
+def _top_error_patterns(entries, source: Source, n: int = 5
+                        ) -> list[tuple[str, int]]:
+    """Return the ``n`` most frequent error-message signatures for ``source``."""
+    counts: dict[str, int] = {}
+    for e in entries:
+        if e.source != source or e.level != Level.ERROR:
+            continue
+        sig = _normalise_message(e.message or e.raw)
+        if not sig:
+            continue
+        counts[sig] = counts.get(sig, 0) + 1
+    # Most frequent first; tie-break by alphabetical order for determinism.
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:n]
+
+
+# Source-specific recommendation + concrete remediation steps for the
+# ``ERRORRATE-*`` aggregate finding. Generic guidance is worthless to an
+# on-call engineer — each branch hands back commands or admin-portal paths
+# they can actually run.
+def _errorrate_remediation(source: Source, dominant: str
+                           ) -> tuple[str, list[str]]:
+    if source == Source.DEFENDER:
+        rec = ("Run `mdatp health` to see the live product state, then chase "
+               "the dominant error pattern shown below — Defender errors "
+               "fall into a small set of buckets (connectivity, definitions, "
+               "RTP/EDR config, kernel-ext load) and the pattern usually "
+               "points straight at which.")
+        steps = [
+            "Run `mdatp health` and look at `healthy: true/false`, "
+            "`real_time_protection_enabled`, `definitions_status`, "
+            "`license_status`, `engine_version`, `app_version`.",
+            "If the dominant pattern mentions connectivity, EDR or cloud "
+            "(`cnc`, `EDR`, `eventhub`, `WCD`, `connection refused`, "
+            "`network`), run `mdatp connectivity test` and inspect any "
+            "proxy/TLS-inspection between the Mac and "
+            "*.events.data.microsoft.com / *.endpoint.security.microsoft.com.",
+            "If the pattern mentions definitions (`signature`, `definitions`, "
+            "`update`), force a refresh: "
+            "`mdatp definitions update` and re-check `mdatp health`.",
+            "If the pattern mentions kext / system extension / endpoint "
+            "security (`es_client`, `SystemExtension`, `kext`, "
+            "`NetworkExtension`), confirm the System Extension + Full Disk "
+            "Access PPPC + Network Filter profiles are deployed and approved "
+            "in System Settings ▸ Privacy & Security.",
+            "Collect a full support bundle for Microsoft: "
+            "`sudo mdatp diagnostic create` (writes a zip under /Library/"
+            "Application Support/Microsoft/Defender/wdavdiag/).",
+        ]
+    elif source == Source.INTUNE:
+        rec = ("Tie the dominant error pattern below to its check-in cycle. "
+               "Intune agent errors usually cluster on one failing policy "
+               "or one unreachable endpoint; fixing that one item collapses "
+               "the rate.")
+        steps = [
+            "Trigger a manual sync from Company Portal ▸ Devices ▸ "
+            "**Check status**, then re-collect logs and confirm the pattern "
+            "still reproduces.",
+            "In Intune ▸ **Devices ▸ macOS ▸ <device>** look at "
+            "**Device configuration** and **Managed Apps** — match the "
+            "dominant pattern's PolicyId/ApplicationId against the failing "
+            "row.",
+            "If the pattern mentions AAD/token/auth, validate the user has "
+            "an Intune licence and a valid Entra session "
+            "(`https://myaccount.microsoft.com`).",
+            "If the pattern mentions a specific URL "
+            "(`manage.microsoft.com`, `login.microsoftonline.com`), confirm "
+            "those endpoints are exempt from TLS inspection per the Intune "
+            "network requirements doc.",
+        ]
+    elif source == Source.AUTOUPDATE:
+        rec = ("Microsoft AutoUpdate errors are almost always transient CDN "
+               "or scan-collision retries. Confirm the dominant pattern is "
+               "one of the known transient codes before treating as real.")
+        steps = [
+            "If the pattern mentions `-1100` / `-1001` / `NSURLError`, it is "
+            "a CDN/network blip — re-run `msupdate --install` and see if it "
+            "clears.",
+            "If the pattern mentions `SUMacControllerErrorAccessLost` "
+            "(7509), it is a scan-collision race — harmless; MAU retries on "
+            "the next interval.",
+            "Confirm `msupdate --config` shows ChannelName = Current (or "
+            "your chosen channel) and HowToCheck = AutomaticDownload.",
+        ]
+    elif source == Source.OFFICE:
+        rec = ("Office error volume is dominated by telemetry channels "
+               "(`Hx.Heartbeat`, `Telemetry.FeatureQuery`, experimentation). "
+               "Spot-check the dominant pattern — if it is a telemetry "
+               "channel, ignore it; otherwise check Microsoft 365 admin "
+               "centre service health.")
+        steps = [
+            "If the dominant pattern is `Telemetry`, `Heartbeat`, "
+            "`FeatureQuery`, `Experimentation` or `SendEvent`, treat as "
+            "telemetry noise — no action.",
+            "If the dominant pattern is `Activation`, `Licensing`, "
+            "`AAD` or `Identity`, sign the user out of Office and back in; "
+            "check the user has an Office 365 licence assigned.",
+            "If the dominant pattern is `Crash`, `SIGABRT` or `SIGSEGV`, "
+            "collect `~/Library/Logs/DiagnosticReports/<app>-*.ips` and "
+            "open a Microsoft support case with the crash log.",
+        ]
+    elif source == Source.PSSO:
+        rec = ("Pair the dominant pattern below with `app-sso platform -s` "
+               "output. PSSO error streams collapse onto a small number of "
+               "root causes (registration loss, associated-domain blocked "
+               "by TLS inspection, extension inactive).")
+        steps = [
+            "Run `app-sso platform -s` and read **Login Configuration** "
+            "and **Device Configuration** — a missing Device Configuration "
+            "explains most token errors.",
+            "If the pattern mentions `swcd`, `swcutil`, `associated domain` "
+            "or `app-site-association`, you have TLS inspection breaking "
+            "associated-domain validation — exempt `*.cdn-apple.com`, "
+            "`*.networking.apple` and `login.microsoftonline.com`.",
+            "If the pattern mentions `PlugInKit`, `4s8qh`, `other version "
+            "in use` or `invalid team identifier`, reboot the Mac and "
+            "confirm SIP is enabled.",
+        ]
+    elif source == Source.DEFENDER or source == Source.INSTALL:
+        rec = ("Group the dominant pattern by package and look at "
+               "PackageKit's `installer` log for the failing preinstall / "
+               "postinstall script.")
+        steps = [
+            "`grep -E 'Install Failed|preinstall|postinstall' "
+            "/var/log/install.log` to find the failing package's exit code.",
+            "Rebuild the package as a flat .pkg with a valid "
+            "`CFBundleVersion` and install-location under `/Applications`.",
+        ]
+    else:
+        rec = ("Look at the dominant pattern below and group it by component "
+               "/ subsystem to find the single failing item driving the "
+               "rate.")
+        steps = [
+            "Grep the source log for the dominant pattern and identify the "
+            "common component / PID / file.",
+            "If one component owns >50% of the errors, restart it and "
+            "re-collect.",
+        ]
+    return rec, steps

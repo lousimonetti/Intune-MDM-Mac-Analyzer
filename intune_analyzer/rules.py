@@ -843,17 +843,18 @@ RULES: list[Rule] = [
         # broker-level PRT acquire/refresh failure phrase. The previous
         # ``token acquisition failed`` was too generic and matched normal MSAL
         # interactive-fallback prompts.
-        # ``requires user interaction: invalid_grant`` is excluded here and
-        # handled by the LOW rule PSSO-PRT-CA-INTERACTION instead, because
-        # that pattern is a by-design Conditional Access prompt, not a PRT fault.
+        # ``requires user interaction`` is NOT a failure — it is the broker
+        # asking for an interactive step (CA policy, MFA, expired session,
+        # initial sign-in). It is handled by the INFO rule
+        # PSSO-PRT-INTERACTION-REQUIRED below and excluded from this HIGH
+        # rule entirely. ``invalid_grant`` on its own (without PRT context)
+        # is also benign on macOS SSO; we only flag it when paired with PRT
+        # acquire/refresh phrasing.
         pattern=r"primary refresh token.*(fail|error|expired|invalid)|"
-                r"\bPRT\b.*(fail|error|expired|invalid|missing|"
-                r"requires user interaction)|"
+                r"\bPRT\b.*(fail|error|expired|invalid|missing)|"
                 r"acquire(_| )prt.*(fail|error)|"
-                r"refresh(_| )prt.*(fail|error)|"
-                r"\binvalid_grant\b.*\bPRT\b",
-        exclude_pattern=r"requires user interaction.*invalid_grant|"
-                        r"invalid_grant.*requires user interaction",
+                r"refresh(_| )prt.*(fail|error)",
+        exclude_pattern=r"requires user interaction",
         severity=Severity.HIGH,
         title="Platform SSO token / Primary Refresh Token errors",
         description="The SSO broker could not acquire or refresh the Primary "
@@ -879,44 +880,42 @@ RULES: list[Rule] = [
         docs_url=f"{D}/entra/identity/devices/troubleshoot-mac-sso-extension-plugin",
     ),
     Rule(
-        id="PSSO-PRT-CA-INTERACTION",
+        id="PSSO-PRT-INTERACTION-REQUIRED",
         source=Source.PSSO,
-        # ``Token request with PRT requires user interaction: invalid_grant``
-        # is emitted when a Conditional Access policy (MFA, compliant-device,
-        # etc.) forces an interactive step.  The PRT itself is healthy; the CA
-        # policy is working as designed.  This is LOW so it doesn’t inflate
-        # the critical/high count when CA is intentionally deployed.
-        pattern=r"requires user interaction.*invalid_grant|"
-                r"invalid_grant.*requires user interaction",
-        severity=Severity.LOW,
-        title="Platform SSO — Conditional Access requires user interaction (by design)",
-        description="The SSO broker received `invalid_grant` with a "
-                    "’requires user interaction’ signal from Entra ID. This "
-                    "is the expected behaviour when a Conditional Access "
-                    "policy (MFA, compliant-device check, Terms of Use, etc.) "
-                    "requires an interactive step before the token can be "
-                    "issued. The Primary Refresh Token itself is intact.",
-        recommendation="No action required unless users are being prompted "
-                       "unexpectedly or more frequently than the CA policy "
-                       "intends. Review the matching CA policy in Entra ▸ "
-                       "**Conditional Access** if the prompt cadence is wrong.",
+        # ``Token request with PRT requires user interaction`` (with or
+        # without a trailing ``: invalid_grant``) is emitted by the SSO
+        # broker every time it needs an interactive step — Conditional
+        # Access satisfaction, MFA prompt, expired session, initial
+        # sign-in, etc. The PRT itself is healthy. This is INFO so it
+        # doesn't dent the health score and is dropped from client-facing
+        # reports, while still being visible to engineers in technical mode.
+        pattern=r"\bPRT\b.*requires user interaction|"
+                r"requires user interaction.*\bPRT\b",
+        severity=Severity.INFO,
+        title="Platform SSO — interactive sign-in required (expected)",
+        description="The SSO broker logged that a token request needs an "
+                    "interactive step (Conditional Access satisfaction, MFA "
+                    "prompt, expired session, initial sign-in). This is the "
+                    "normal protocol signal Entra ID returns whenever a "
+                    "silent token cannot be issued; the Primary Refresh "
+                    "Token itself is intact and no action is required.",
+        recommendation="No action required. Investigate only if users report "
+                       "being prompted far more often than the CA / "
+                       "sign-in-frequency policy intends.",
         remediation_steps=(
-            "Open Entra ▸ **Sign-in logs** and filter by the user to confirm "
-            "which Conditional Access policy triggered the interactive step.",
-            "If users are prompted too often, review the policy’s session "
-            "controls (sign-in frequency, persistent browser session).",
-            "If the prompts are unexpected (CA policy should not apply to "
-            "this device), verify device compliance and registration state "
-            "with `app-sso platform -s`.",
+            "If prompt cadence seems wrong, open Entra ▸ **Sign-in logs** "
+            "for the user and confirm which policy is triggering the "
+            "interactive step.",
+            "Review session controls (sign-in frequency, persistent browser "
+            "session) on the matching Conditional Access policy.",
         ),
         category="Authentication",
         docs_url=f"{D}/entra/identity/devices/troubleshoot-macos-platform-single-sign-on-extension",
         false_positive_note=(
-            "A low volume of these lines is entirely normal in any org with "
-            "Conditional Access — they appear whenever an interactive MFA or "
-            "compliance prompt is satisfied. Suppress with "
-            "`--ignore PSSO-PRT-CA-INTERACTION` if the CA policy is "
-            "intentional and the prompt rate is expected."),
+            "These lines are 100% normal — they appear every time the broker "
+            "needs an interactive step. Suppress with "
+            "`--ignore PSSO-PRT-INTERACTION-REQUIRED` if you don't want them "
+            "in the report at all."),
     ),
     Rule(
         id="PSSO-ASSOCIATED-DOMAIN",

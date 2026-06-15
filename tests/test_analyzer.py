@@ -145,6 +145,42 @@ def test_packagekit_hosted_team_is_low_not_high(tmp_path):
     assert by_id["INSTALL-TEAM-RESPONSIBILITY"].severity == Severity.LOW
 
 
+def test_errorrate_finding_surfaces_top_defender_patterns(tmp_path):
+    # The aggregate ERRORRATE finding must (a) actually list the dominant
+    # error patterns instead of telling the user to "investigate", and
+    # (b) hand back Defender-specific remediation commands when the source
+    # is Defender.
+    mdatp = tmp_path / "mdatp"
+    mdatp.mkdir()
+    lines = []
+    # 8 copies of the same connectivity error (varying timestamps/PIDs).
+    for i in range(8):
+        lines.append(f"2026-06-15 12:00:{i:02d} [ERROR] [WCD] "
+                     f"Connection refused to events.data.microsoft.com "
+                     f"(pid={1000+i})")
+    # 4 copies of a different error pattern.
+    for i in range(4):
+        lines.append(f"2026-06-15 12:01:{i:02d} [ERROR] [Definitions] "
+                     f"signature update failed (code={300+i})")
+    # A couple of healthy lines so the ratio is realistic but still > 15%.
+    for i in range(3):
+        lines.append(f"2026-06-15 12:02:{i:02d} [INFO] mdatp health "
+                     f"refreshed")
+    (mdatp / "mdatp_health.log").write_text("\n".join(lines) + "\n")
+    res = run_analysis(input_path=str(tmp_path))
+    by_id = {f.id: f for f in res.findings}
+    assert "ERRORRATE-DEFENDER" in by_id, by_id.keys()
+    f = by_id["ERRORRATE-DEFENDER"]
+    # Top pattern dominates and is named explicitly in the description.
+    assert "Connection refused" in f.description
+    # Both patterns surface as impacted items, collapsed across pid/code.
+    assert any("Connection refused" in p for p in f.impacted)
+    assert any("signature update failed" in p for p in f.impacted)
+    # Defender-specific remediation, not the old generic line.
+    assert "mdatp health" in " ".join(f.remediation_steps)
+    assert "investigate the dominant error pattern" not in f.recommendation.lower()
+
+
 def test_apps_and_office_penalties_are_capped():
     # Pile up enough Apps + Office findings to blow past the caps; the
     # health score must still reflect *at most* APPS_PENALTY_CAP +
