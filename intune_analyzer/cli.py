@@ -66,6 +66,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--fail-on", choices=[s.value for s in Severity],
                    help="Exit non-zero if any finding at or above this "
                         "severity exists (useful in CI).")
+    p.add_argument("--ignore", metavar="ID", action="append", default=[],
+                   help="Suppress a finding or CIS control by ID. Repeatable. "
+                        "Example: --ignore MAU-UPDATE-FAIL --ignore CIS-2.5.2. "
+                        "Comma-separated lists are also accepted: "
+                        "--ignore MAU-UPDATE-FAIL,DEFENDER-THREAT.")
     p.add_argument("--version", action="version",
                    version=f"intune-analyzer {__version__}")
     return p
@@ -78,12 +83,20 @@ def main(argv: list[str] | None = None) -> int:
         from .gui import launch
         return launch()
 
+    ignore: set[str] = set()
+    for item in args.ignore:
+        for piece in item.split(","):
+            piece = piece.strip()
+            if piece:
+                ignore.add(piece)
+
     try:
         result = run_analysis(
             input_path=args.input,
             live=args.live,
             client_facing=args.client,
             verbose=args.verbose,
+            ignore=ignore,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)

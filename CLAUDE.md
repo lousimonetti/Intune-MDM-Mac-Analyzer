@@ -87,16 +87,70 @@ Run `pytest` (25 tests). Try it: `python3 -m intune_analyzer --input samples`.
   than the broad container prefix. PSSO is **not** in `EXPECTED_SOURCES` — it is
   optional (only orgs that deploy it have logs), so absence must not raise a
   `NODATA-PSSO` coverage finding.
-- **L7 — CIS validation is log-evidence-based, three-state, and the KPI ignores
-  unknowns.** `cis.evaluate` resolves each control to `pass` / `fail` /
-  `not-assessed`; we can only judge controls the collected logs carry a signal
-  for. The **match-score KPI = pass / (pass + fail)** so `not-assessed` controls
-  never dilute it (`CISReport.score`). Banding is fixed by requirement: **≥ 95
-  green, 75–95 yellow, < 75 red** (`CISReport.status`); 95 is green (inclusive
-  lower bound of the top band). CIS runs on the **full** finding set *before* the
-  client-facing INFO trim so the KPI is identical in technical and client modes
-  (regression: `test_analysis_result_has_cis_and_client_mode_matches`). It is
-  **not** a substitute for a full on-device CIS scan — say so in any output.
+- **L7 — CIS validation is log-evidence-based, four-state, and the KPI ignores
+  unknowns.** `cis.evaluate` resolves each control to `pass` / `configured` /
+  `fail` / `not-assessed`. `pass` requires positive evidence; `configured`
+  means the governing source is present and reports no contrary signal
+  (control is in place but only *inferred*); both count toward the pass total
+  but are surfaced separately so reviewers can see where the verdict was
+  *observed* vs *inferred*. The **match-score KPI = (pass + configured) /
+  (pass + configured + fail)** so `not-assessed` controls never dilute it.
+  Banding is fixed by requirement: **≥ 95 green, 75–95 yellow, < 75 red**
+  (`CISReport.status`); 95 is green (inclusive lower bound of the top band).
+  CIS runs on the **full** finding set *before* the client-facing INFO trim so
+  the KPI is identical in technical and client modes. It is **not** a
+  substitute for a full on-device CIS scan — say so in any output.
+- **L8 — Guard against substring-regex false positives.** The previous CIS
+  fail patterns used unbounded alternations (`gatekeeper.*off`,
+  `autologin.*(enabled|on)`, `well-?known.*(failed|403)`) which matched
+  unrelated logs by accident: `off` inside other words, `403` as part of
+  `InternalSequenceNumber":40320`, `on` inside `config`. The fix is two-fold:
+  (a) each `CISCheck` now declares `fail_sources` so only entries from
+  relevant sources can supply a fail signal, and (b) `match_word` wraps the
+  regex with `\b` word boundaries. The `Rule` model gained the same powers:
+  `file_pattern` (only fire on matching basenames — e.g.
+  `DEFENDER-INSTALL-FAIL` only runs against `mdatp/install.log`),
+  `exclude_pattern` (drop lines that match this second regex first), and
+  `transient=True` (failures the CIS evaluator demotes to `configured`).
+  Regression coverage: `test_well_known_rule_does_not_match_outlook_telemetry`,
+  `test_defender_runtime_errors_do_not_fail_install`,
+  `test_unrelated_log_does_not_fail_autologin_or_gatekeeper`,
+  `test_transient_finding_demotes_fail_to_configured`.
+- **L9 — Users need triage tools.** Every `Finding` and `CISCheckResult`
+  carries `remediation_steps` (rendered as a numbered checklist) and a
+  `false_positive_note` (rendered as an expandable callout with a
+  copy-paste-able `--ignore <ID>` suggestion). The CLI `--ignore ID` flag
+  (repeatable, comma-separated) suppresses a finding or CIS control by ID;
+  suppressed IDs are listed in a dedicated report section so the suppression
+  is transparent. Suppressed findings are excluded from the CIS evaluator's
+  fail signals (regression: `test_ignore_flag_suppresses_finding`,
+  `test_ignore_suppresses_finding_and_control`).
+- **L10 — Severity must reflect live impact, not log volume.** A finding's
+  severity should answer "is this an active problem right now?" — not "how
+  scary does the log line look?". Two patterns to keep applying:
+  1. **Split benign-looking signals into their own LOW-severity rule** rather
+     than burying them under a HIGH rule. Example:
+     `PackageKit: Failed to set hosted team responsibility for install to
+     team:(<TEAMID>)` is informational — installs still complete — so it
+     lives in its own rule `INSTALL-TEAM-RESPONSIBILITY` (LOW) and is
+     `exclude_pattern`-d out of `INSTALL-FAIL` (HIGH). The line is still
+     visible; it just doesn't inflate the critical/high count
+     (regression: `test_packagekit_hosted_team_is_low_not_high`).
+  2. **Demote historical errors when the live product is healthy.** Done in
+     `Analyzer._adjust_severity()`: if Defender logs are present AND no live
+     health rule fired (`DEFENDER-UNHEALTHY` / `DEFENDER-RTP-OFF` /
+     `DEFENDER-DEFS-STALE`), `DEFENDER-INSTALL-FAIL` is rewritten to a LOW
+     "Historical … (product currently running)" finding with the rationale
+     baked into the title. The original evidence is preserved so the user
+     can still see what happened; the priority just no longer pretends the
+     box is on fire. The opposite case (Defender unhealthy) keeps the HIGH
+     severity so we never mask a real outage (regressions:
+     `test_defender_install_demoted_when_running`,
+     `test_defender_install_stays_high_when_unhealthy`).
+  When adding a new rule, ask both questions: *Is this a live failure, or a
+  cosmetic / historical signal?* and *What other finding would prove the
+  product is healthy now?* If the answer to the second is "this other rule
+  in `RULES`", add the cross-check to `_adjust_severity`.
 
 ---
 

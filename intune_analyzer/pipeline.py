@@ -13,7 +13,8 @@ from .models import AnalysisResult
 
 
 def run_analysis(*, input_path: Optional[str] = None, live: bool = False,
-                 client_facing: bool = False, verbose: bool = False
+                 client_facing: bool = False, verbose: bool = False,
+                 ignore: Optional[set[str]] = None,
                  ) -> AnalysisResult:
     """Collect logs and analyse them into an :class:`AnalysisResult`.
 
@@ -35,7 +36,7 @@ def run_analysis(*, input_path: Optional[str] = None, live: bool = False,
             "on the managed Mac."
         )
 
-    analyzer = Analyzer(client_facing=client_facing)
+    analyzer = Analyzer(client_facing=client_facing, ignore=ignore)
     return analyzer.analyze(
         collection,
         hostname=device_info.get("hostname", ""),

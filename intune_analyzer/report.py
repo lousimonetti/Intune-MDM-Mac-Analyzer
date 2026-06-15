@@ -72,6 +72,8 @@ def render_html(result: AnalysisResult, *, client_facing: bool = False,
         parts.append(_exec_summary(result))
 
     parts.append(_findings_section(result, client_facing))
+    if not client_facing and getattr(result, "ignored", None):
+        parts.append(_ignored_section(result))
     parts.append(_sources_section(result))
     if not client_facing:
         parts.append(_coverage_section(result))
@@ -205,17 +207,47 @@ def _findings_section(result: AnalysisResult, client_facing: bool) -> str:
                         f"{ev_items}</details>")
         count_badge = (f"<span class='count'>×{f.count}</span>"
                        if f.count > 1 and not client_facing else "")
+        # Ordered remediation steps.
+        steps_html = ""
+        steps = getattr(f, "remediation_steps", []) or []
+        if steps:
+            items = "".join(f"<li>{_e(s)}</li>" for s in steps)
+            steps_html = (f"<details class='steps' open><summary>Step-by-step "
+                          f"remediation</summary><ol>{items}</ol></details>")
+        # False-positive caveat + suppress hint.
+        fp_note = getattr(f, "false_positive_note", "") or ""
+        transient = getattr(f, "transient", False)
+        fp_html = ""
+        if fp_note or transient:
+            note = fp_note
+            if transient:
+                note = (note + " " if note else "") + (
+                    "This failure mode is normally self-healing — the "
+                    "analyzer treats it as transient and does not count it "
+                    "against the CIS score.")
+            fp_html = (
+                f"<details class='fp'><summary>Could this be a false "
+                f"positive?</summary>"
+                f"<p>{_e(note)}</p>"
+                f"<p class='hint'>If confirmed, suppress with "
+                f"<code>--ignore {_e(f.id)}</code> on the next run "
+                f"(or pass <code>ignore={{'{_e(f.id)}'}}</code> from "
+                f"<code>run_analysis</code>).</p>"
+                f"</details>")
         rows.append(f"""
-<article class="finding" style="border-left-color:{color}">
+<article class="finding" style="border-left-color:{color}" id="finding-{_e(f.id)}">
   <div class="finding-head">
     <span class="sev" style="background:{color}">{f.severity.value.upper()}</span>
     <span class="cat">{_e(f.category)}</span>
     <span class="src">{_e(f.source.value)}</span>
+    <span class="fid">{_e(f.id)}</span>
     {count_badge}
   </div>
   <h3>{_e(f.title)}</h3>
   <p class="desc">{_e(f.description)}</p>
   <p class="rec"><b>Recommended action:</b> {_e(f.recommendation)}</p>
+  {steps_html}
+  {fp_html}
   {docs}
   {evidence}
 </article>""")
@@ -250,14 +282,18 @@ def _sources_section(result: AnalysisResult) -> str:
 
 
 CIS_STATUS_COLORS = {"green": "#2f9e44", "yellow": "#f08c00", "red": "#b00020"}
-CIS_CHECK_COLORS = {"pass": "#2f9e44", "fail": "#b00020", "not-assessed": "#94a3b8"}
-CIS_CHECK_LABELS = {"pass": "PASS", "fail": "FAIL", "not-assessed": "N/A"}
+CIS_CHECK_COLORS = {"pass": "#2f9e44", "configured": "#66a80f",
+                    "fail": "#b00020", "not-assessed": "#94a3b8"}
+CIS_CHECK_LABELS = {"pass": "PASS", "configured": "CONFIGURED",
+                    "fail": "FAIL", "not-assessed": "N/A"}
 
 
 def _cis_section(result: AnalysisResult, client_facing: bool) -> str:
     cis = result.cis
     color = CIS_STATUS_COLORS.get(cis.status(), "#94a3b8")
     score = cis.score()
+    configured = getattr(cis, "configured", 0)
+    pass_only = max(cis.passed - configured, 0)
     assessed_note = (f"{cis.passed} of {cis.assessed} assessable controls pass"
                      if cis.assessed else "No controls could be assessed from "
                      "the collected logs")
@@ -272,7 +308,8 @@ def _cis_section(result: AnalysisResult, client_facing: bool) -> str:
     <p class="cis-headline">CIS Level 1 match: <b style="color:{color}">{score}%</b></p>
     <p class="hint">{_e(assessed_note)}. Banding: ≥ 95% green · 75–95% yellow · &lt; 75% red.</p>
     <div class="cis-counts">
-      <span class="cis-c pass">✓ {cis.passed} pass</span>
+      <span class="cis-c pass">✓ {pass_only} pass</span>
+      <span class="cis-c cfg">⚙ {configured} configured</span>
       <span class="cis-c fail">✗ {cis.failed} fail</span>
       <span class="cis-c na">— {cis.not_assessed} not assessed</span>
       <span class="cis-c tot">{cis.total} controls</span>
@@ -280,28 +317,58 @@ def _cis_section(result: AnalysisResult, client_facing: bool) -> str:
   </div>
 </div>"""
 
+    triage = ("<p class='hint triage'>💡 <b>Disagree with a verdict?</b> Every "
+              "control lists its evidence and a <em>Could this be a false "
+              "positive?</em> note. To suppress a specific control or finding "
+              "in future reports add <code>--ignore &lt;ID&gt;</code> "
+              "(repeatable, comma-separated also accepted). Example: "
+              "<code>--ignore CIS-2.5.2 --ignore MAU-UPDATE-FAIL</code>.</p>")
+
     rows = []
     for c in cis.checks:
-        ccol = CIS_CHECK_COLORS[c.status]
-        clabel = CIS_CHECK_LABELS[c.status]
-        evidence = ""
+        ccol = CIS_CHECK_COLORS.get(c.status, "#94a3b8")
+        clabel = CIS_CHECK_LABELS.get(c.status, c.status.upper())
+        confidence = getattr(c, "confidence", "high")
+        steps = getattr(c, "remediation_steps", []) or []
+        fp_note = getattr(c, "false_positive_note", "") or ""
+
+        # Build a richer expandable block: one-line summary, numbered steps,
+        # evidence, false-positive note + suppress hint.
+        parts = [f"<p class='rec'><b>Remediation summary:</b> "
+                 f"{_e(c.remediation)}</p>"]
+        if steps and not client_facing:
+            items = "".join(f"<li>{_e(s)}</li>" for s in steps)
+            parts.append(f"<b>Step-by-step:</b><ol class='cis-steps'>"
+                         f"{items}</ol>")
         if c.evidence and not client_facing:
-            ev_items = "".join(f"<pre class='ev'>{_e(s)}</pre>" for s in c.evidence)
-            evidence = (f"<details class='evidence'><summary>Evidence &amp; "
-                        f"remediation</summary>"
-                        f"<p class='rec'><b>Remediation:</b> {_e(c.remediation)}</p>"
-                        f"{ev_items}</details>")
-        elif not client_facing:
-            evidence = (f"<details class='evidence'><summary>Remediation</summary>"
-                        f"<p class='rec'>{_e(c.remediation)}</p></details>")
+            ev_items = "".join(f"<pre class='ev'>{_e(s)}</pre>"
+                               for s in c.evidence)
+            parts.append(f"<b>Evidence:</b>{ev_items}")
+        if fp_note and not client_facing:
+            parts.append(f"<p class='fp-note'><b>Could this be a false "
+                         f"positive?</b> {_e(fp_note)} If so, suppress with "
+                         f"<code>--ignore {_e(c.id)}</code>.</p>")
+        body = "".join(parts)
+        if not client_facing:
+            evidence_html = (f"<details class='evidence'><summary>Evidence, "
+                             f"remediation steps &amp; false-positive note"
+                             f"</summary>{body}</details>")
+        else:
+            evidence_html = ""
+
         docs = (f" <a href='{_e(c.docs_url)}' target='_blank' rel='noopener'>↗</a>"
                 if c.docs_url else "")
+        conf_badge = ""
+        if confidence == "low":
+            conf_badge = ("<span class='conf-low' title='Verdict inferred from "
+                          "source presence rather than a direct positive "
+                          "test'>low-confidence</span>")
         rows.append(f"""
 <tr>
   <td class="cis-id">{_e(c.id)}{docs}</td>
-  <td><b>{_e(c.title)}</b><div class="cis-rat">{_e(c.rationale)}</div>{evidence}</td>
+  <td><b>{_e(c.title)}</b> {conf_badge}<div class="cis-rat">{_e(c.rationale)}</div>{evidence_html}</td>
   <td class="cis-sec">{_e(c.section)}</td>
-  <td class="cis-st"><span class="cis-pill" style="background:{ccol}">{clabel}</span></td>
+  <td class="cis-st"><span class="cis-pill" style="background:{ccol}">{_e(clabel)}</span></td>
 </tr>""")
 
     table = f"""
@@ -310,12 +377,32 @@ def _cis_section(result: AnalysisResult, client_facing: bool) -> str:
   <tbody>{''.join(rows)}</tbody>
 </table>"""
 
-    return (f"<section class='cis'><h2>CIS Level 1 validation</h2>{kpi}{table}"
+    legend = ("<p class='hint'>Statuses: "
+              "<b style='color:#2f9e44'>PASS</b> — positive evidence in the "
+              "logs · <b style='color:#66a80f'>CONFIGURED</b> — control is in "
+              "place (governing source present, no contrary signal) · "
+              "<b style='color:#b00020'>FAIL</b> — contrary evidence · "
+              "<b style='color:#94a3b8'>N/A</b> — no signal either way "
+              "(excluded from the score).</p>")
+
+    return (f"<section class='cis'><h2>CIS Level 1 validation</h2>{kpi}{triage}"
+            f"{table}{legend}"
             "<p class='hint'>Evidence-based validation against a curated subset "
             "of CIS Apple macOS Benchmark <b>Level 1</b> controls. Controls "
             "without a signal in the collected logs are reported as "
             "<em>not assessed</em> and excluded from the match score — this is "
             "not a substitute for a full on-device CIS scan.</p></section>")
+
+
+def _ignored_section(result: AnalysisResult) -> str:
+    ids = sorted(getattr(result, "ignored", []) or [])
+    if not ids:
+        return ""
+    chips = " ".join(f"<code>{_e(i)}</code>" for i in ids)
+    return ("<section><h2>Suppressed findings</h2>"
+            f"<div class='ignored-box'>The following {len(ids)} ID(s) were "
+            f"suppressed via <code>--ignore</code> and excluded from the "
+            f"CIS score and findings list: {chips}.</div></section>")
 
 
 def _coverage_section(result: AnalysisResult) -> str:
@@ -485,6 +572,31 @@ table.srctable { width:100%; border-collapse:collapse; font-size:.9rem; }
   background:#f1f5f9; color:var(--muted); font-weight:600; }
 .cis-c.pass { background:#e6f4ea; color:#2f9e44; }
 .cis-c.fail { background:#fdecec; color:#b00020; }
+.cis-c.cfg { background:#ecf6e1; color:#66a80f; }
+.cis-c.na { background:#f1f5f9; color:#5f6c7b; }
+.cis-c.tot { background:#eef2ff; color:#3730a3; }
+.cis-steps { padding-left:1.2rem; margin:.3rem 0 .6rem; }
+.cis-steps li { margin:.2rem 0; }
+.fp-note { margin:.5rem 0; padding:.5rem .7rem; background:#fff7ed;
+  border:1px solid #fed7aa; border-radius:8px; }
+.triage { background:#eef2ff; border:1px solid #c7d2fe; padding:.6rem .8rem;
+  border-radius:8px; margin:.6rem 0; }
+.conf-low { display:inline-block; margin-left:.4rem; padding:0 .4rem;
+  border-radius:999px; background:#fef3c7; color:#92400e; font-size:.7rem;
+  font-weight:700; letter-spacing:.04em; }
+.fid { background:#0d1117; color:#9bdcfe; padding:.05rem .45rem;
+  border-radius:5px; font-family:ui-monospace,Menlo,Consolas,monospace;
+  font-size:.7rem; }
+details.steps { margin:.4rem 0; }
+details.steps summary, details.fp summary {
+  cursor:pointer; color:var(--accent); font-size:.85rem; }
+details.steps ol { padding-left:1.3rem; margin:.3rem 0; }
+details.steps li { margin:.2rem 0; }
+details.fp { margin:.3rem 0; padding:.4rem .6rem; background:#fff7ed;
+  border:1px solid #fed7aa; border-radius:8px; }
+.ignored-box { background:#f1f5f9; border:1px solid var(--line);
+  padding:.6rem .8rem; border-radius:8px; font-size:.85rem; }
+.ignored-box code { background:#fff; padding:.05rem .35rem; border-radius:4px; }
 table.cistable { width:100%; border-collapse:collapse; font-size:.88rem; }
 .cistable th,.cistable td { text-align:left; padding:.5rem .6rem;
   border-bottom:1px solid var(--line); vertical-align:top; }

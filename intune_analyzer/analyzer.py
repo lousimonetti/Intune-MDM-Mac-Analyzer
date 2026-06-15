@@ -7,11 +7,17 @@ Turns collected :class:`LogEntry` objects into :class:`Finding` objects via:
 2. **Aggregate heuristics** - things you can only see across the whole data
    set: missing data sources, high error ratios, stale logs, and positive
    "opportunity for improvement" observations.
+
+Both signature and aggregate findings can be **ignored** via the optional
+``ignore`` set (finding IDs) - useful for users who have triaged a noisy
+signal and want it suppressed in future reports.
 """
 
 from __future__ import annotations
 
 import datetime as _dt
+import os
+import re
 
 from . import cis as cis_module
 from .collector import CollectionResult
@@ -27,9 +33,12 @@ EXPECTED_SOURCES = [Source.INTUNE, Source.DEFENDER, Source.AUTOUPDATE]
 
 
 class Analyzer:
-    def __init__(self, *, client_facing: bool = False):
+    def __init__(self, *, client_facing: bool = False,
+                 ignore: set[str] | None = None):
         # client_facing trims noisy INFO-level opportunity findings.
         self.client_facing = client_facing
+        # finding/CIS IDs the user has explicitly suppressed.
+        self.ignore: set[str] = {x.strip() for x in (ignore or set()) if x.strip()}
 
     def analyze(self, collection: CollectionResult, *,
                 hostname: str = "", input_path: str = "",
@@ -40,17 +49,27 @@ class Analyzer:
             device_info=device_info or {},
             summaries=collection.summary_list(),
             entries=collection.entries,
+            ignored=sorted(self.ignore),
         )
         findings: list[Finding] = []
         findings.extend(self._apply_rules(collection.entries))
         findings.extend(self._aggregate(result))
+        # Context-aware severity adjustment (e.g. demote DEFENDER-INSTALL-FAIL
+        # when Defender is currently running healthy).
+        self._adjust_severity(findings, result)
         # Sort: highest severity first, then by count desc.
         findings.sort(key=lambda f: (-f.severity.rank, -f.count, f.id))
+        # Apply user suppressions before CIS evaluation so ignored findings
+        # never feed CIS fail signals either.
+        if self.ignore:
+            findings = [f for f in findings if f.id not in self.ignore]
         # CIS Level 1 validation runs on the full finding set (before the
         # client-facing trim) so the KPI is identical in both modes.
         result.cis = cis_module.evaluate(
             findings, result.entries,
-            {s.source for s in result.summaries})
+            {s.source for s in result.summaries},
+            ignore=self.ignore,
+        )
         if self.client_facing:
             findings = [f for f in findings if f.severity != Severity.INFO]
         result.findings = findings
@@ -62,12 +81,25 @@ class Analyzer:
     def _apply_rules(self, entries) -> list[Finding]:
         out: list[Finding] = []
         for rule in RULES:
+            if rule.id in self.ignore:
+                continue
             rx = rule.regex()
+            file_rx = rule.file_regex()
+            excl_rx = rule.exclude_regex()
             matches = []
             for e in entries:
                 if rule.source is not None and e.source != rule.source:
                     continue
+                # File-scope check (e.g. DEFENDER-INSTALL-FAIL only on
+                # ``mdatp/install.log``). We match against the basename **and**
+                # the immediate parent directory so a rule can target either.
+                if file_rx is not None:
+                    hint = _file_hint(e.file)
+                    if not file_rx.search(hint):
+                        continue
                 hay = e.raw or e.message
+                if excl_rx is not None and excl_rx.search(hay):
+                    continue
                 if rx.search(hay):
                     matches.append(e)
             if not matches:
@@ -91,8 +123,63 @@ class Analyzer:
                 count=len(matches),
                 evidence=evidence,
                 docs_url=rule.docs_url,
+                remediation_steps=list(rule.remediation_steps),
+                false_positive_note=rule.false_positive_note,
+                transient=rule.transient,
             ))
         return out
+
+    # ------------------------------------------------------------------ #
+    # Context-aware severity adjustment
+    # ------------------------------------------------------------------ #
+    def _adjust_severity(self, findings: list[Finding],
+                         result: AnalysisResult) -> None:
+        """Demote historical install errors when the product is currently running.
+
+        Rationale: a `[ERROR] preinstall failed` line from months ago is not
+        actionable today if Defender is actively logging, the daemon is up
+        and no current health signal contradicts it. The line is still worth
+        showing — but as a LOW-severity quality signal, not a HIGH alarm.
+        """
+        ids = {f.id for f in findings}
+        sources_present = {s.source for s in result.summaries}
+
+        # Defender is "currently running" when we have Defender logs and none
+        # of the live health rules fired.
+        defender_running = (
+            Source.DEFENDER in sources_present
+            and not (ids & {"DEFENDER-UNHEALTHY", "DEFENDER-RTP-OFF",
+                            "DEFENDER-DEFS-STALE"})
+        )
+        if defender_running:
+            for f in findings:
+                if f.id == "DEFENDER-INSTALL-FAIL" and f.severity != Severity.LOW:
+                    f.severity = Severity.LOW
+                    f.title = ("Historical Defender installation errors "
+                               "(product currently running)")
+                    f.description = (
+                        "The mdatp install log contains errors from a past "
+                        "installation, but Defender is currently logging and "
+                        "no live health signal (`DEFENDER-UNHEALTHY`, "
+                        "`DEFENDER-RTP-OFF`, `DEFENDER-DEFS-STALE`) is active. "
+                        "These errors are most likely stale — keep them on "
+                        "the radar for the next reinstall but they are not a "
+                        "live problem.")
+                    # Keep the original remediation; add a note up front.
+                    if f.false_positive_note:
+                        f.false_positive_note = (
+                            "Defender is currently running on this device "
+                            "(Defender logs present, no live health signal). "
+                            "Historical install errors are downgraded to "
+                            "LOW because they are not causing a current "
+                            "outage. " + f.false_positive_note)
+                    else:
+                        f.false_positive_note = (
+                            "Defender is currently running on this device — "
+                            "these install errors are historical and are not "
+                            "causing a live outage. Confirm with "
+                            "`mdatp health` and suppress with "
+                            "`--ignore DEFENDER-INSTALL-FAIL` if accepted.")
 
     # ------------------------------------------------------------------ #
     # Aggregate heuristics
@@ -134,6 +221,15 @@ class Analyzer:
                                    "high sustained error rate usually points to "
                                    "a single root cause worth fixing first.",
                     category="Reliability",
+                    false_positive_note=(
+                        "Office telemetry channels are emitted at "
+                        "warning/error level by design (telemetry feature "
+                        "queries, experimentation events). A high error rate "
+                        "on Office often reflects telemetry verbosity, not a "
+                        "user-visible problem — confirm by spot-checking the "
+                        "evidence in the per-rule findings above before "
+                        "escalating."
+                        if summ.source == Source.OFFICE else ""),
                 ))
 
         # 3. Stale logs (last activity well in the past).
@@ -223,3 +319,12 @@ class Analyzer:
                 category="Optimization",
             ))
         return out
+
+
+def _file_hint(path: str) -> str:
+    """Return ``<parent>/<basename>`` for file-scope rule matching."""
+    if not path:
+        return ""
+    base = os.path.basename(path)
+    parent = os.path.basename(os.path.dirname(path)) if path else ""
+    return f"{parent}/{base}".lstrip("/")

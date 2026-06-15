@@ -86,6 +86,14 @@ class Finding:
     count: int = 1
     evidence: list[str] = field(default_factory=list)
     docs_url: str = ""
+    # Ordered, concrete remediation steps (rendered as a numbered list).
+    remediation_steps: list[str] = field(default_factory=list)
+    # A short caveat the user can read to decide whether to ignore the finding.
+    false_positive_note: str = ""
+    # True when the failure is normally self-healing (e.g. transient CDN or
+    # network errors); the CIS evaluator demotes these so a healthy baseline
+    # is not scored down by a one-off retry.
+    transient: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -128,11 +136,20 @@ class CISCheckResult:
     id: str
     title: str
     section: str
-    status: str  # "pass" | "fail" | "not-assessed"
+    status: str  # "pass" | "fail" | "configured" | "not-assessed"
     rationale: str
     remediation: str
     evidence: list[str] = field(default_factory=list)
     docs_url: str = ""
+    # Confidence in the verdict (``high`` for explicit signal, ``low`` when
+    # we are inferring from the mere presence of a source). Surfaced in the
+    # report so users can decide where to dig.
+    confidence: str = "high"
+    # Ordered remediation steps (multi-line) shown beside the one-line summary.
+    remediation_steps: list[str] = field(default_factory=list)
+    # Short note explaining when this control should be treated as a false
+    # positive (or how to suppress it).
+    false_positive_note: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -152,11 +169,17 @@ class CISReport:
 
     @property
     def passed(self) -> int:
-        return sum(1 for c in self.checks if c.status == "pass")
+        # "configured" counts toward the pass total — the control is in
+        # place, even if a transient retry was logged.
+        return sum(1 for c in self.checks if c.status in ("pass", "configured"))
 
     @property
     def failed(self) -> int:
         return sum(1 for c in self.checks if c.status == "fail")
+
+    @property
+    def configured(self) -> int:
+        return sum(1 for c in self.checks if c.status == "configured")
 
     @property
     def not_assessed(self) -> int:
@@ -197,6 +220,7 @@ class CISReport:
             "status_label": self.status_label(),
             "passed": self.passed,
             "failed": self.failed,
+            "configured": self.configured,
             "not_assessed": self.not_assessed,
             "assessed": self.assessed,
             "total": self.total,
@@ -216,6 +240,8 @@ class AnalysisResult:
     findings: list[Finding] = field(default_factory=list)
     entries: list[LogEntry] = field(default_factory=list)
     cis: Optional["CISReport"] = None
+    # Finding / CIS IDs the user has explicitly suppressed for this run.
+    ignored: list[str] = field(default_factory=list)
 
     # ------------------------------------------------------------------ #
     # Derived metrics

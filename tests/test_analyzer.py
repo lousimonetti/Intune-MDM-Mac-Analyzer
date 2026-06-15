@@ -62,6 +62,102 @@ def test_missing_source_flagged(tmp_path):
     assert "NODATA-AUTOUPDATE" in ids
 
 
+def test_well_known_rule_does_not_match_outlook_telemetry(tmp_path):
+    # Regression: a previous regex `well-?known.*(failed|403)` falsely
+    # matched Outlook telemetry whose JSON happened to contain the literal
+    # ``well-known`` token and a sequence number including ``403``.
+    office = tmp_path / "office"
+    office.mkdir()
+    (office / "Primary123_Outlook.log").write_text(
+        "2026-06-10 00:22:50 OUTLOOK Telemetry Event biyhq Medium SendEvent "
+        '{"EventName":"Office.Outlook.Hx.Heartbeat",'
+        '"Flags":28147506277843201,'
+        '"InternalSequenceNumber":40320,'
+        '"WellKnownTokenName":"hx",'
+        '"Time":"2026-06-10T00:22:50Z"}\n')
+    # Drop in an Intune log so MDM-ENROLL-WELLKNOWN is not the only signal.
+    (tmp_path / "Intune").mkdir()
+    (tmp_path / "Intune" / "IntuneMDMAgent.log").write_text(
+        "2026-06-10 09:00:00 | I | all good\n")
+    res = run_analysis(input_path=str(tmp_path))
+    ids = {f.id for f in res.findings}
+    assert "MDM-ENROLL-WELLKNOWN" not in ids, (
+        "well-known rule false-positive on Outlook telemetry")
+
+
+def test_defender_runtime_errors_do_not_fail_install(tmp_path):
+    # Regression: DEFENDER-INSTALL-FAIL used to fire on every `[error]` token
+    # in any Defender log. It must only consider the actual install log.
+    mdatp = tmp_path / "mdatp"
+    mdatp.mkdir()
+    (mdatp / "microsoft_defender_core.log").write_text(
+        "[546][2026-06-15 15:26:22 UTC][error]: kernel queue full\n")
+    res = run_analysis(input_path=str(tmp_path))
+    ids = {f.id for f in res.findings}
+    assert "DEFENDER-INSTALL-FAIL" not in ids
+
+
+def test_defender_install_demoted_when_running(tmp_path):
+    # Historical install errors should drop to LOW when Defender is
+    # currently logging and no live health rule fired.
+    mdatp = tmp_path / "mdatp"
+    mdatp.mkdir()
+    # An old install error.
+    (mdatp / "install.log").write_text(
+        "2025-01-01 09:00:00 [ERROR] preinstall failed: kext not approved\n")
+    # And a current runtime log — proves the daemon is running.
+    (mdatp / "microsoft_defender_core.log").write_text(
+        "2026-06-15 09:00:00 [info]: scan engine ready\n")
+    res = run_analysis(input_path=str(tmp_path))
+    by_id = {f.id: f for f in res.findings}
+    assert "DEFENDER-INSTALL-FAIL" in by_id
+    assert by_id["DEFENDER-INSTALL-FAIL"].severity == Severity.LOW
+    assert "currently running" in by_id["DEFENDER-INSTALL-FAIL"].title.lower()
+
+
+def test_defender_install_stays_high_when_unhealthy(tmp_path):
+    # If Defender is actually unhealthy, install errors keep their HIGH
+    # severity — we don't want to mask a real outage.
+    mdatp = tmp_path / "mdatp"
+    mdatp.mkdir()
+    (mdatp / "install.log").write_text(
+        "2026-06-14 12:00:00 [ERROR] installation failed\n")
+    (mdatp / "microsoft_defender.log").write_text(
+        "2026-06-15 09:00:00 [info]: healthy: false\n")
+    res = run_analysis(input_path=str(tmp_path))
+    by_id = {f.id: f for f in res.findings}
+    assert "DEFENDER-UNHEALTHY" in by_id
+    assert by_id["DEFENDER-INSTALL-FAIL"].severity == Severity.HIGH
+
+
+def test_packagekit_hosted_team_is_low_not_high(tmp_path):
+    # "Failed to set hosted team responsibility" must surface as its own
+    # LOW-severity finding (packaging quality signal), not as a HIGH
+    # INSTALL-FAIL.
+    (tmp_path / "install.log").write_text(
+        "2026-06-05 15:47:49 MAC installer[6359]: "
+        "PackageKit: Failed to set hosted team responsibility for install "
+        "to team:(UL6CGN7MAL)\n")
+    res = run_analysis(input_path=str(tmp_path))
+    by_id = {f.id: f for f in res.findings}
+    assert "INSTALL-FAIL" not in by_id, "must not flip to a HIGH install failure"
+    assert "INSTALL-TEAM-RESPONSIBILITY" in by_id
+    assert by_id["INSTALL-TEAM-RESPONSIBILITY"].severity == Severity.LOW
+
+
+def test_ignore_flag_suppresses_finding(tmp_path):
+    mdatp = tmp_path / "mdatp"
+    mdatp.mkdir()
+    (mdatp / "install.log").write_text(
+        "2026-06-15 12:00:00 [ERROR] installation failed: missing kext\n")
+    base = run_analysis(input_path=str(tmp_path))
+    assert "DEFENDER-INSTALL-FAIL" in {f.id for f in base.findings}
+    suppressed = run_analysis(input_path=str(tmp_path),
+                              ignore={"DEFENDER-INSTALL-FAIL"})
+    assert "DEFENDER-INSTALL-FAIL" not in {f.id for f in suppressed.findings}
+    assert "DEFENDER-INSTALL-FAIL" in suppressed.ignored
+
+
 def test_empty_input(tmp_path):
     res = run_analysis(input_path=str(tmp_path))
     # No data => perfect-ish score but coverage findings exist.
