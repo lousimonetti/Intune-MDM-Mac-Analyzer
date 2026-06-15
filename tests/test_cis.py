@@ -130,6 +130,31 @@ def test_evaluate_pattern_pass_fail_and_not_assessed():
     assert {c.id: c.status for c in none.checks}["CIS-2.5.2"] == "not-assessed"
 
 
+def test_cis_1_1_treats_7301_as_pass_evidence():
+    # `SUMacControllerError Code=7301` / `ScanNoUpdateFound` is the macOS
+    # softwareupdate framework reporting "no updates available" — i.e. the
+    # device IS up to date. CIS-1.1 must accept it as PASS, not noise.
+    e = LogEntry(source=Source.AUTOUPDATE, level=Level.ERROR,
+                 message="majorError: Error Domain=SUMacControllerError "
+                         "Code=7301 \"scan for major software update failed: "
+                         "no updates available\"",
+                 raw="majorError: Error Domain=SUMacControllerError "
+                     "Code=7301 \"scan for major software update failed\"")
+    rep = cis.evaluate([], [e], {Source.AUTOUPDATE})
+    by_id = {c.id: c for c in rep.checks}
+    assert by_id["CIS-1.1"].status == "pass"
+    # The PASS verdict must NOT also produce a FAIL — the fail_pattern was
+    # narrow enough to ignore this line.
+    assert by_id["CIS-1.1"].status != "fail"
+
+    # And the bare `ScanNoUpdateFound` token is also accepted.
+    e2 = LogEntry(source=Source.AUTOUPDATE, level=Level.ERROR,
+                  message="softwareupdate scan: SUMacControllerErrorScanNoUpdateFound",
+                  raw="softwareupdate scan: SUMacControllerErrorScanNoUpdateFound")
+    rep2 = cis.evaluate([], [e2], {Source.AUTOUPDATE})
+    assert {c.id: c.status for c in rep2.checks}["CIS-1.1"] == "pass"
+
+
 def test_analysis_result_has_cis_and_client_mode_matches():
     res = run_analysis(input_path=str(SAMPLES))
     assert res.cis is not None

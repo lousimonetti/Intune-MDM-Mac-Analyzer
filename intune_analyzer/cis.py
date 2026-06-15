@@ -105,17 +105,27 @@ CIS_LEVEL1: list[CISCheck] = [
                     "policy / DDM softwareupdate declaration and confirm the "
                     "device can reach Apple's update servers.",
         fail_findings=("SWUPDATE-FAIL",),
-        # Restricted to the system / installer logs so unrelated source code
-        # mentioning "software update" does not flip the verdict.
-        fail_sources=frozenset({Source.INSTALL, Source.SYSTEM}),
+        # Include AUTOUPDATE so MAU's softwareupdate-scan signals (7301 /
+        # ScanNoUpdateFound) are visible to the *pass* path below. The
+        # fail_pattern is narrow enough that they don't trigger FAIL.
+        fail_sources=frozenset({Source.INSTALL, Source.SYSTEM, Source.AUTOUPDATE}),
         # Require an explicit install/download failure phrase — pure "Error"
         # tokens from softwareupdated are not authoritative.
         fail_pattern=r"softwareupdate.*failure-?reason|"
                      r"software ?update.*\b(install|download)\b.*\b(fail|"
                      r"failure|error)\b|"
                      r"failed to (download|install).*(os update|macos update)",
+        # ``SUMacControllerError Code=7301`` / ``ScanNoUpdateFound`` is the
+        # macOS softwareupdate framework saying "there is nothing to offer" —
+        # i.e. the device IS up to date. When Apple DDM is enforcing OS
+        # updates this is the authoritative positive signal, so it counts as
+        # PASS evidence for CIS-1.1.
         pass_pattern=r"software ?update.*\b(installed|up to date|succeeded|"
-                     r"already up-?to-?date)\b",
+                     r"already up-?to-?date)\b|"
+                     r"SUMacControllerError.*\bCode=7301\b|"
+                     r"\bCode=7301\b.*SUMacControllerError|"
+                     r"SUMacControllerErrorScanNoUpdateFound|"
+                     r"\bScanNoUpdateFound\b",
         match_word=False,
         remediation_steps=(
             "Run `softwareupdate --list` on the Mac and confirm any "
@@ -129,10 +139,11 @@ CIS_LEVEL1: list[CISCheck] = [
         ),
         false_positive_note=(
             "`SUMacControllerErrorAccessLost (7509)` is a benign race between "
-            "two clients; `SUMacControllerErrorScanNoUpdateFound (7301)` "
-            "means the device is up-to-date. Both are excluded; if the only "
-            "evidence is one of those codes the control will not be marked "
-            "FAIL."),
+            "two clients and is ignored. `SUMacControllerErrorScanNoUpdateFound "
+            "(7301)` is the system reporting **the device is up-to-date** — "
+            "when Apple DDM is enforcing OS updates this is the authoritative "
+            "positive signal, so it now counts as PASS evidence for this "
+            "control rather than noise."),
     ),
     CISCheck(
         id="CIS-1.2",
