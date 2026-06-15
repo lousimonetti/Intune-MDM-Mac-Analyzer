@@ -71,6 +71,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "Example: --ignore MAU-UPDATE-FAIL --ignore CIS-2.5.2. "
                         "Comma-separated lists are also accepted: "
                         "--ignore MAU-UPDATE-FAIL,DEFENDER-THREAT.")
+    p.add_argument("--since-hours", metavar="N", type=int, default=None,
+                   help="Only analyse dated log entries from the last N "
+                        "hours (e.g. --since-hours 24). Undated lines are "
+                        "kept so keyword rules still see them. Off by default.")
     p.add_argument("--version", action="version",
                    version=f"intune-analyzer {__version__}")
     return p
@@ -97,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
             client_facing=args.client,
             verbose=args.verbose,
             ignore=ignore,
+            since_hours=args.since_hours,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -154,6 +159,9 @@ def _print_console_summary(result) -> None:
           f"({result.health_grade()})")
     print(f"  Files / lines: {result.total_files} / {result.total_lines:,}")
     print(f"  Errors / warn: {result.total_errors} / {result.total_warnings}")
+    if result.window_hours:
+        print(f"  Time window  : last {result.window_hours}h "
+              f"(since {result.window_since.strftime('%Y-%m-%d %H:%M')})")
     print(f"  Findings     : {len(result.findings)}  "
           f"(crit {sev['critical']}, high {sev['high']}, "
           f"med {sev['medium']}, low {sev['low']}, info {sev['info']})")

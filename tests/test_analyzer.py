@@ -145,6 +145,36 @@ def test_packagekit_hosted_team_is_low_not_high(tmp_path):
     assert by_id["INSTALL-TEAM-RESPONSIBILITY"].severity == Severity.LOW
 
 
+def test_since_hours_drops_old_dated_entries_keeps_undated(tmp_path):
+    # Opt-in time window: dated entries older than the cutoff are dropped;
+    # undated lines (e.g. multi-line continuations) are retained so keyword
+    # rules still see them.
+    import datetime as _dt
+    intune = tmp_path / "Intune"
+    intune.mkdir()
+    now = _dt.datetime.now()
+    recent = now - _dt.timedelta(hours=1)
+    old = now - _dt.timedelta(hours=48)
+    (intune / "IntuneMDMAgent.log").write_text(
+        f"{old.strftime('%Y-%m-%d %H:%M:%S')}.000 | IntuneMDMAgent | 1 | E | "
+        "Failed to apply configuration profile 'Old-Stale-Policy'\n"
+        f"{recent.strftime('%Y-%m-%d %H:%M:%S')}.000 | IntuneMDMAgent | 1 | E | "
+        "Application install failed for 'Recent App': download failed\n"
+        "    continuation line with no timestamp — undated\n")
+    # Without the window, both errors should drive their rules.
+    base = run_analysis(input_path=str(intune))
+    assert "INTUNE-POLICY-FAIL" in {f.id for f in base.findings}
+    assert "INTUNE-APP-INSTALL-FAIL" in {f.id for f in base.findings}
+    # With a 24h window, the old policy-fail line is gone, the recent
+    # app-install one stays, and window metadata is set.
+    scoped = run_analysis(input_path=str(intune), since_hours=24)
+    ids = {f.id for f in scoped.findings}
+    assert "INTUNE-APP-INSTALL-FAIL" in ids
+    assert "INTUNE-POLICY-FAIL" not in ids
+    assert scoped.window_hours == 24
+    assert scoped.window_since is not None
+
+
 def test_errorrate_finding_surfaces_top_defender_patterns(tmp_path):
     # The aggregate ERRORRATE finding must (a) actually list the dominant
     # error patterns instead of telling the user to "investigate", and

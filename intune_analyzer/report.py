@@ -91,12 +91,19 @@ def _header(result: AnalysisResult, title: str, client_facing: bool) -> str:
         f"<span class='chip'>{_e(k)}: {_e(v)}</span>"
         for k, v in result.device_info.items()
     )
+    window_html = ""
+    if result.window_hours:
+        since = result.window_since.strftime("%Y-%m-%d %H:%M")
+        window_html = (
+            f"<div class='window-badge'>Scoped to last "
+            f"{result.window_hours}h &middot; since {since}</div>")
     return f"""
 <div class="topbar">
   <div>
     <h1>{_e(title)}</h1>
     <div class="subtitle">{sub} &middot; {host}</div>
     <div class="chips">{dev_rows}</div>
+    {window_html}
   </div>
   <div class="actions">
     <button class="btn" onclick="window.print()">🖨 Save as PDF</button>
@@ -520,6 +527,9 @@ section, footer { background:var(--panel); margin:1rem auto; padding:1.4rem 1.8r
   padding:1.6rem 1.8rem; max-width:980px; margin:1rem auto 0; border-radius:12px; }
 .subtitle { opacity:.9; margin-top:.2rem; }
 .chips { margin-top:.6rem; display:flex; flex-wrap:wrap; gap:.4rem; }
+.window-badge { display:inline-block; margin-top:.6rem; padding:.2rem .6rem;
+  background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.32);
+  border-radius:14px; font-size:.78rem; letter-spacing:.02em; }
 .chip { background:rgba(255,255,255,.18); padding:.15rem .55rem; border-radius:999px;
   font-size:.78rem; }
 .actions { text-align:right; }

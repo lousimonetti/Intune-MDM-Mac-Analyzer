@@ -248,6 +248,10 @@ class AnalysisResult:
     cis: Optional["CISReport"] = None
     # Finding / CIS IDs the user has explicitly suppressed for this run.
     ignored: list[str] = field(default_factory=list)
+    # Optional time-window the collected entries were filtered to (e.g.
+    # ``--since-hours 24``). ``None`` means no filter was applied.
+    window_since: Optional[_dt.datetime] = None
+    window_hours: Optional[int] = None
 
     # ------------------------------------------------------------------ #
     # Derived metrics
@@ -349,6 +353,9 @@ class AnalysisResult:
                 "warnings": self.total_warnings,
             },
             "severity_counts": self.severity_counts(),
+            "window_since": (self.window_since.isoformat()
+                             if self.window_since else None),
+            "window_hours": self.window_hours,
             "cis": self.cis.to_dict() if self.cis else None,
             "summaries": [s.to_dict() for s in self.summaries],
             "findings": [f.to_dict() for f in self.findings],
