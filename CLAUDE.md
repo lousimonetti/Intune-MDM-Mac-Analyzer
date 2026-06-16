@@ -161,6 +161,42 @@ Run `pytest` (25 tests). Try it: `python3 -m intune_analyzer --input samples`.
   cosmetic / historical signal?* and *What other finding would prove the
   product is healthy now?* If the answer to the second is "this other rule
   in `RULES`", add the cross-check to `_adjust_severity`.
+- **L11 — `system_profiler` omits default-value keys; absence == "not
+  enforced".** This is the single most load-bearing fact about validating
+  macOS MDM policies and it is non-obvious: when you read
+  `system_profiler SPConfigurationProfileDataType`, *only keys explicitly
+  set in the deployed profile appear in the output*. A key the admin left
+  at its macOS default — even when that default matches the recommended
+  value — is **absent**, and for the device the effective behaviour is
+  "policy does not enforce this setting" because the system can re-derive
+  the default in either direction.  Source: CIS-1.1 validator in
+  `/Users/lou/Downloads/MiniMacTest_v0.0.19.zsh` (BEGIN_SETTING_DATA
+  comment header — "keys at their default value are NOT emitted by
+  system_profiler and will always fail this check"), confirmed empirically
+  against several fleet exports.  Two practical consequences for this
+  codebase:
+  1. **Validation patterns are positive presence checks**, not
+     "value equals default". The collector validates the legacy
+     `com.apple.SoftwareUpdate` payload by grepping the dump for each
+     `Key = Value` literal in
+     `apple_ddm.SOFTWAREUPDATE_MDM_RECOMMENDED_KEYS`; a missing match
+     emits a synthetic `mdm-validation: missing-key …` entry that the
+     `SWUPDATE-MDM-KEY-MISSING` rule (MEDIUM) surfaces. The same
+     positive-presence pattern works for any future payload (firewall,
+     screensaver, restrictions); just add the (payload, expected-key,
+     expected-value) tuples to `apple_ddm.py`.
+  2. **Documentation must tell the admin to set the value explicitly**
+     in Intune even when it matches the macOS default. The remediation
+     steps on `SWUPDATE-MDM-KEY-MISSING` say so, and any new validator
+     finding should too — otherwise admins "fix" the alert by leaving
+     the key off and it silently regresses.
+  Schema sensitivity: keys move between payloads as macOS evolves
+  (`DisableAirDrop` → `allowAirDrop` in `com.apple.applicationaccess`;
+  `DisableUsingiCloudPassword` → `allowCloudKeychainSync`;
+  `GKFeatureGameCenterAllowed` → `allowGameCenter`; legacy MCX keys like
+  `allowCloudBTMM` simply disappeared). When adding a new validator key,
+  confirm it is still in the current Apple device-management schema
+  before relying on it.
 
 ---
 
@@ -194,7 +230,20 @@ accept PRs — file feedback via Feedback Assistant). Repo layout: `mdm/`
   update-states `available … updating, failed`).
 - `SWUPDATE-FAIL` — DDM-enforced macOS software update failures, from
   `declarative/status/softwareupdate.failure-reason.yaml` (fields: `count`,
-  `reason`, `timestamp`).
+  `reason`, `timestamp`). Decoded into human-readable causes via
+  `apple_ddm.decode_failure_reasons()` (sourced from the same YAML plus
+  observed `SUMacController` codes — 7301 / 7509).
+- `DDM-SWUPDATE-INCOMPLETE` — DDM `softwareupdate.enforcement.specific`
+  declaration deployed but missing a key Apple's schema flags as required
+  (`TargetOSVersion`, `TargetLocalDateTime`). Required-key list lives in
+  `apple_ddm.SOFTWAREUPDATE_ENFORCEMENT_REQUIRED_KEYS` and mirrors
+  `declarative/declarations/configurations/softwareupdate.enforcement.specific.yaml`.
+- `SWUPDATE-MDM-KEY-MISSING` — legacy `com.apple.SoftwareUpdate` MDM
+  payload deployed but a CIS §1.1 recommended key isn't explicitly set
+  (see Lesson L11). Expected key/value map lives in
+  `apple_ddm.SOFTWAREUPDATE_MDM_RECOMMENDED_KEYS`; the canonical set was
+  cross-checked against an external fleet-validation script (see Section 6
+  below).
 
 **Platform SSO (PSSO) — grounded in Microsoft Learn, not the Apple schema.**
 PSSO is delivered by the **Microsoft Enterprise SSO extension** inside the
@@ -309,6 +358,42 @@ state, audit config) instead of relying on log-text signals.
 ### CIS (Center for Internet Security)
 - CIS Apple macOS Benchmarks (Level 1 / Level 2 hardening controls; the basis
   for `cis.py`): <https://www.cisecurity.org/benchmark/apple_os>
+
+### External cross-checks (local references, not URLs)
+- **MiniMacTest_v0.0.19.zsh** (local file:
+  `/Users/lou/Downloads/MiniMacTest_v0.0.19.zsh`). A fleet-validation script
+  the user supplied; its `BEGIN_SETTING_DATA` block enumerates the CIS
+  Level 1 keys to grep out of `system_profiler` for each Intune
+  configuration profile. Useful for two things:
+  1. Confirms the **system_profiler omission rule** documented in Lesson
+     L11 ("keys at their default value are NOT emitted by system_profiler
+     and will always fail this check"). This is the basis for the
+     "absence == not enforced" logic in `_ingest_ddm_softwareupdate_evidence`.
+  2. Provides the **CIS §1.1 `com.apple.SoftwareUpdate` recommended key
+     set** used by `apple_ddm.SOFTWAREUPDATE_MDM_RECOMMENDED_KEYS` and the
+     `SWUPDATE-MDM-KEY-MISSING` rule
+     (`AllowPreReleaseInstallation`, `AutomaticCheckEnabled`,
+     `AutomaticDownload`, `AutomaticallyInstallAppUpdates`,
+     `AutomaticallyInstallMacOSUpdates`, `ConfigDataInstall`,
+     `CriticalUpdateInstall`).
+  Patterns worth porting if the user asks us to expand validator coverage:
+  - `com.apple.applicationaccess` — iCloud / sharing restrictions (note
+    the deprecated-keys list: `allowCloudBTMM`,
+    `DisableFMMiCloudSetting`, `safariAllowAutoFill`,
+    `allowActivityContinuation`, `allowAirPrint`, `DisableAirDrop`,
+    `GKFeatureGameCenterAllowed`, `whiteListEnabled`,
+    `DisableUsingiCloudPassword`, `familyControlsEnabled` —
+    do NOT add these to a validator). Replacements documented in the
+    script: `allowFindMyDevice`, `allowGameCenter`, `allowAirDrop`,
+    `allowCloudKeychainSync`.
+  - `com.apple.screensaver` — `askForPassword = 1`,
+    `askForPasswordDelay = 0`, `idleTime = 1200` (CIS 2.3.1 / 2.3.2).
+  - `com.apple.security.firewall` — `EnableFirewall = 1`,
+    `EnableStealthMode = 1`, `BlockAllIncoming = 0` (CIS 2.5.2).
+  When porting, every key must be confirmed against the current
+  apple/device-management schema first — the script tracks which keys
+  Apple has removed across macOS versions, so use its REMOVED comments
+  as a guide for what NOT to add.
 
 ---
 
