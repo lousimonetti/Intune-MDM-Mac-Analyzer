@@ -754,6 +754,51 @@ RULES: list[Rule] = [
             "literally means **the device is up to date**. Both are filtered "
             "out of this rule."),
     ),
+    Rule(
+        id="DDM-SWUPDATE-INCOMPLETE",
+        # Catches the synthetic ``ddm-validation: missing-key`` entries the
+        # collector emits when a ``softwareupdate.enforcement.specific``
+        # payload is present in system_profiler but missing one of the
+        # required keys from Apple's schema (TargetOSVersion /
+        # TargetLocalDateTime). A malformed declaration silently disables
+        # enforcement on the device.
+        source=Source.SYSTEM,
+        pattern=r"ddm-validation:\s*missing-key\b|"
+                r"DDM softwareupdate enforcement declaration is missing "
+                r"required key",
+        subject_pattern=r"missing required key ['\"]([^'\"]+)['\"]|"
+                        r"missing-key (\w+)",
+        subject_label="Missing keys",
+        severity=Severity.MEDIUM,
+        title="DDM softwareupdate declaration is missing required keys",
+        description="A `com.apple.configuration.softwareupdate.enforcement."
+                    "specific` payload is deployed but does not include "
+                    "every key Apple's schema marks as required. The device "
+                    "keeps the configuration active but cannot enforce the "
+                    "update until the declaration is fixed.",
+        recommendation="In Intune, edit the DDM software-update declaration "
+                       "and add the missing `TargetOSVersion` / "
+                       "`TargetLocalDateTime` value; re-deploy and re-collect.",
+        remediation_steps=(
+            "Open the Intune DDM software-update declaration and confirm "
+            "`TargetOSVersion` (or `TargetBuildVersion`) and "
+            "`TargetLocalDateTime` are both set per "
+            "https://github.com/apple/device-management/blob/release/"
+            "declarative/declarations/configurations/"
+            "softwareupdate.enforcement.specific.yaml.",
+            "Re-deploy the corrected declaration, force a check-in, and "
+            "re-collect with `--live`. The control should switch from "
+            "MISSING-KEYS to PASS.",
+        ),
+        category="Updates",
+        docs_url="https://github.com/apple/device-management/blob/release/"
+                 "declarative/declarations/configurations/"
+                 "softwareupdate.enforcement.specific.yaml",
+        false_positive_note=(
+            "Only emitted when `system_profiler` was actually inspected; "
+            "offline bundles without that dump will never trigger this rule."
+        ),
+    ),
 
     # ------------------------------------------------------------------ #
     # Platform SSO (PSSO) / Microsoft Enterprise SSO plug-in.

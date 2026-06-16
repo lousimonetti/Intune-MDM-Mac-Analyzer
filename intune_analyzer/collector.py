@@ -234,36 +234,101 @@ class Collector:
                 "Captured `profiles status -type enrollment` output.")
 
     def _ingest_ddm_softwareupdate_evidence(self, dump: str, *, file: str) -> None:
-        """Scan a ``system_profiler SPConfigurationProfileDataType`` dump for
-        any declarative software-update enforcement declarations and emit a
-        single ``Source.SYSTEM`` evidence entry per match.
+        """Scan a ``system_profiler SPConfigurationProfileDataType`` dump and
+        emit one ``Source.SYSTEM`` evidence entry per relevant payload.
 
-        We deliberately ingest *only* the marker lines (not the whole dump,
-        which can be megabytes) — the CIS evaluator's pass_pattern picks up
-        the declaration name and credits CIS-1.1.
+        Two classes of evidence:
+
+        1. A **ground-truth marker** that proves the dump itself was
+           collected. The CIS evaluator uses this to tell "policy data was
+           inspected and nothing was enforced" (=> FAIL) apart from "policy
+           data was never collected" (=> not-assessed).
+        2. Per-payload lines for the policies CIS-1.1 / CIS-1.2 care about:
+           the DDM software-update declarations
+           (``com.apple.configuration.softwareupdate.enforcement.specific`` /
+           ``…settings``), the legacy ``com.apple.SoftwareUpdate`` MDM
+           profile, and ``com.microsoft.autoupdate2`` for MAU.
+
+        We do not ingest the whole dump (multi-MB on a real device); only
+        the marker line and any matching payload lines.
         """
+        # 1. Always emit the ground-truth marker so the evaluator knows
+        #    SPConfigurationProfileDataType *was* inspected, even if no
+        #    matching payload is found.
+        self.result.entries.append(LogEntry(
+            source=Source.SYSTEM, level=Level.INFO,
+            message="system_profiler SPConfigurationProfileDataType collected",
+            component="system_profiler", file=file,
+            raw="system_profiler:SPConfigurationProfileDataType:collected",
+        ))
+
+        # 2. Per-payload evidence lines.
+        from . import apple_ddm
         markers = (
-            "com.apple.configuration.softwareupdate.enforcement.specific",
+            apple_ddm.SOFTWAREUPDATE_ENFORCEMENT_TYPE,
             "com.apple.configuration.softwareupdate.settings",
             "softwareupdate.enforcement.specific",
+            "com.apple.softwareupdate",  # legacy MDM software-update payload
+            "com.microsoft.autoupdate2",
         )
-        seen = False
-        for line in dump.splitlines():
+        lines = dump.splitlines()
+        seen_payloads: list[str] = []
+        # Track every line index that matched the DDM enforcement type so
+        # we can scan a window around it for the required schema keys
+        # (TargetOSVersion / TargetLocalDateTime per Apple's
+        # ``softwareupdate.enforcement.specific.yaml``).
+        enforcement_payload_indices: list[int] = []
+        for idx, line in enumerate(lines):
             stripped = line.strip()
             if not stripped:
                 continue
             low = stripped.lower()
-            if any(m in low for m in markers):
+            for m in markers:
+                if m in low:
+                    self.result.entries.append(LogEntry(
+                        source=Source.SYSTEM, level=Level.INFO,
+                        message=stripped, component="system_profiler",
+                        file=file, raw=stripped,
+                    ))
+                    seen_payloads.append(m)
+                    if m == apple_ddm.SOFTWAREUPDATE_ENFORCEMENT_TYPE:
+                        enforcement_payload_indices.append(idx)
+                    break
+
+        # 2b. Shape-validate every enforcement.specific payload against the
+        # schema's required keys. ``system_profiler`` output groups payload
+        # keys in an indented block, so a ±25-line window around the
+        # PayloadType line is enough to catch the surrounding keys without
+        # bleeding into the next profile.
+        for idx in enforcement_payload_indices:
+            window = "\n".join(lines[max(0, idx - 25):idx + 25])
+            missing = [
+                k for k in apple_ddm.SOFTWAREUPDATE_ENFORCEMENT_REQUIRED_KEYS
+                if k not in window
+            ]
+            for k in missing:
                 self.result.entries.append(LogEntry(
-                    source=Source.SYSTEM, level=Level.INFO,
-                    message=stripped, component="system_profiler",
-                    file=file, raw=stripped,
+                    source=Source.SYSTEM, level=Level.ERROR,
+                    message=(
+                        "DDM softwareupdate enforcement declaration is "
+                        f"missing required key {k!r} per Apple schema "
+                        "softwareupdate.enforcement.specific.yaml"),
+                    component="system_profiler",
+                    file=file,
+                    raw=f"ddm-validation: missing-key {k}",
                 ))
-                seen = True
-        if seen:
+
+        if seen_payloads:
+            unique = sorted(set(seen_payloads))
             self.result.notes.append(
-                "DDM softwareupdate enforcement declaration detected via "
-                "`system_profiler SPConfigurationProfileDataType`.")
+                "Detected configuration-profile payloads in "
+                "`system_profiler SPConfigurationProfileDataType`: "
+                + ", ".join(unique) + ".")
+        else:
+            self.result.notes.append(
+                "`system_profiler SPConfigurationProfileDataType` was "
+                "inspected but no software-update or autoupdate2 payload "
+                "was found — policy is provably not enforced.")
 
 
 def _run(cmd: list[str]) -> Optional[str]:

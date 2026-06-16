@@ -80,6 +80,12 @@ class CISCheck:
     fail_pattern: Optional[str] = None
     pass_pattern: Optional[str] = None
     pass_if_source: Optional[Source] = None
+    # When the ground-truth source (e.g. ``system_profiler``) WAS collected
+    # but the pass_pattern did not match, the control flips to ``fail``
+    # rather than ``not-assessed`` — we proved the policy isn't deployed.
+    # The regex matches a synthetic marker entry the collector emits when
+    # the relevant ground-truth dump ran successfully.
+    ground_truth_marker: Optional[str] = None
     # Only entries with a source in this set are considered for the fail
     # pattern. Empty set == any source. When ``pass_if_source`` is also set we
     # default ``fail_sources`` to that single source so the control is only
@@ -97,94 +103,114 @@ CIS_LEVEL1: list[CISCheck] = [
     # --- 1 Software Updates ------------------------------------------------ #
     CISCheck(
         id="CIS-1.1",
-        title="Ensure all Apple-provided software is current",
+        title="macOS software update policy is enforced (DDM / MDM)",
         section="1 Software Updates",
-        rationale="Running the latest OS and security responses closes known "
-                  "vulnerabilities; CIS Level 1 requires updates to be applied.",
-        remediation="Enforce macOS update installation via an Intune update "
-                    "policy / DDM softwareupdate declaration and confirm the "
-                    "device can reach Apple's update servers.",
+        rationale="CIS Level 1 requires software updates to be applied. The "
+                  "auditable signal for that is policy enforcement: a DDM "
+                  "software-update declaration or a legacy "
+                  "`com.apple.SoftwareUpdate` MDM payload must be installed "
+                  "on the device. Log-level 'is the latest patch on?' "
+                  "evidence is not authoritative — the configuration profile "
+                  "is.",
+        remediation="Deploy a DDM software-update enforcement declaration "
+                    "(`com.apple.configuration.softwareupdate.enforcement."
+                    "specific`) or, for older fleets, a Microsoft Intune "
+                    "software-update configuration profile that maps to "
+                    "`com.apple.SoftwareUpdate`. Re-collect with `--live` so "
+                    "`system_profiler SPConfigurationProfileDataType` can "
+                    "prove the policy is installed.",
+        # SWUPDATE-FAIL still drives a FAIL when DDM enforcement itself logs
+        # a failure-reason (the DDM declaration is deployed but the device
+        # could not apply the update).
         fail_findings=("SWUPDATE-FAIL",),
-        # Include AUTOUPDATE so MAU's softwareupdate-scan signals (7301 /
-        # ScanNoUpdateFound) are visible to the *pass* path below. The
-        # fail_pattern is narrow enough that they don't trigger FAIL.
-        fail_sources=frozenset({Source.INSTALL, Source.SYSTEM, Source.AUTOUPDATE}),
-        # Require an explicit install/download failure phrase — pure "Error"
-        # tokens from softwareupdated are not authoritative.
-        fail_pattern=r"softwareupdate.*failure-?reason|"
-                     r"software ?update.*\b(install|download)\b.*\b(fail|"
-                     r"failure|error)\b|"
-                     r"failed to (download|install).*(os update|macos update)",
-        # PASS evidence comes from three places, any of which is enough:
-        #   1. The system reporting it is up to date (text installed /
-        #      "up to date" / "succeeded").
-        #   2. ``SUMacControllerError Code=7301`` / ``ScanNoUpdateFound`` —
-        #      macOS softwareupdate framework saying "nothing to offer", the
-        #      authoritative runtime signal when DDM enforces OS updates.
-        #   3. A live ``system_profiler`` dump showing a DDM software-update
-        #      enforcement declaration is installed
-        #      (``com.apple.configuration.softwareupdate.enforcement.specific``
-        #      / ``softwareupdate.settings``). This proves the policy is
-        #      *deployed*, complementing the runtime 7301 signal.
-        pass_pattern=r"software ?update.*\b(installed|up to date|succeeded|"
-                     r"already up-?to-?date)\b|"
-                     r"SUMacControllerError.*\bCode=7301\b|"
-                     r"\bCode=7301\b.*SUMacControllerError|"
-                     r"SUMacControllerErrorScanNoUpdateFound|"
-                     r"\bScanNoUpdateFound\b|"
-                     r"com\.apple\.configuration\.softwareupdate\."
+        fail_sources=frozenset({Source.SYSTEM}),
+        # PASS evidence: a DDM software-update declaration or the legacy
+        # MDM `com.apple.SoftwareUpdate` payload appears in the
+        # system_profiler dump. We intentionally do NOT pass on log-text
+        # signals like "up to date" — those say "the device is patched
+        # *right now*", not "the policy is enforced". The runtime 7301 /
+        # ScanNoUpdateFound signal also says nothing about policy
+        # enforcement, so it is no longer accepted here.
+        pass_pattern=r"com\.apple\.configuration\.softwareupdate\."
                      r"(enforcement\.specific|settings)|"
-                     r"softwareupdate\.enforcement\.specific",
+                     r"softwareupdate\.enforcement\.specific|"
+                     r"\bcom\.apple\.SoftwareUpdate\b",
+        # If system_profiler ran successfully but no software-update
+        # payload was found, the control is FAIL — not "not-assessed".
+        ground_truth_marker=r"system_profiler.*SPConfigurationProfileDataType.*collected",
         match_word=False,
         remediation_steps=(
-            "Run `softwareupdate --list` on the Mac and confirm any "
-            "outstanding updates.",
-            "If a DDM update declaration is in place, check **Intune ▸ Devices "
-            "▸ macOS ▸ Update declaration status** for this device.",
-            "Free at least 20 GB of disk space (macOS installers need "
-            "headroom); confirm `swcdn.apple.com` is reachable.",
-            "Once updates have applied, re-collect logs and re-run the "
-            "analyzer to confirm the control returns to PASS.",
+            "In Intune ▸ **Devices ▸ Configuration profiles**, deploy a "
+            "DDM declaration of type "
+            "`com.apple.configuration.softwareupdate.enforcement.specific` "
+            "(or a settings-catalog software-update profile that maps to "
+            "the legacy `com.apple.SoftwareUpdate` payload).",
+            "On the Mac, run `system_profiler SPConfigurationProfileDataType "
+            "| grep -i softwareupdate` and confirm the payload is present.",
+            "If a payload is shown but the device still isn't patching, "
+            "check **Intune ▸ Devices ▸ macOS ▸ Update declaration status** "
+            "for the per-device reason.",
+            "Re-collect with `--live` and re-run the analyzer to confirm "
+            "the control returns to PASS.",
         ),
         false_positive_note=(
-            "`SUMacControllerErrorAccessLost (7509)` is a benign race between "
-            "two clients and is ignored. `SUMacControllerErrorScanNoUpdateFound "
-            "(7301)` is the system reporting **the device is up-to-date** — "
-            "when Apple DDM is enforcing OS updates this is the authoritative "
-            "positive signal and counts as PASS. In live (`--live`) runs, the "
-            "presence of a DDM software-update enforcement declaration in "
-            "`system_profiler SPConfigurationProfileDataType` "
-            "(`com.apple.configuration.softwareupdate.enforcement.specific` "
-            "or `…softwareupdate.settings`) is also accepted as PASS — it "
-            "proves the policy is deployed even if no scan has happened yet."),
+            "This control is now a *policy-enforcement* check, not a "
+            "patch-level check. It will be **not-assessed** on offline "
+            "bundles that don't include `system_profiler "
+            "SPConfigurationProfileDataType` output — collect with `--live` "
+            "or paste the dump into the bundle to get a real verdict. "
+            "`SUMacControllerErrorAccessLost (7509)` and "
+            "`SUMacControllerErrorScanNoUpdateFound (7301)` are runtime "
+            "scan signals and don't affect this control."),
     ),
     CISCheck(
         id="CIS-1.2",
-        title="Ensure automatic application updates are enabled",
+        title="Microsoft AutoUpdate (MAU) policy is enforced",
         section="1 Software Updates",
-        rationale="Automatic updates keep Microsoft/Office apps patched without "
-                  "user action, reducing exposure window.",
-        remediation="Deploy a com.microsoft.autoupdate2 profile set to "
-                    "AutomaticDownload and confirm Microsoft AutoUpdate health.",
-        # ``MAU-UPDATE-FAIL`` is intentionally NOT in fail_findings any more:
-        # a transient CDN error does not mean MAU is disabled. The analyzer
-        # marks that rule ``transient=True`` and the evaluator therefore
-        # demotes the verdict to ``configured`` if it is the only signal.
+        rationale="Microsoft/Office apps must be patched without user "
+                  "action. The auditable signal is a "
+                  "`com.microsoft.autoupdate2` configuration profile "
+                  "deployed by MDM — not whether the MAU binary happens "
+                  "to be running on the device.",
+        remediation="Deploy a settings-catalog profile for "
+                    "`com.microsoft.autoupdate2` with "
+                    "`HowToCheck = AutomaticDownload`. Re-collect with "
+                    "`--live` so `system_profiler "
+                    "SPConfigurationProfileDataType` can prove the profile "
+                    "is installed.",
+        # MAU-DISABLED still flips to FAIL — if MAU is logging that auto
+        # updates are off, the profile is either missing or misconfigured.
+        # MAU-UPDATE-FAIL is intentionally NOT in fail_findings: a
+        # transient CDN error does not mean the policy isn't enforced.
         fail_findings=("MAU-DISABLED",),
-        pass_if_source=Source.AUTOUPDATE,
+        fail_sources=frozenset({Source.SYSTEM, Source.AUTOUPDATE}),
+        # PASS evidence: the autoupdate2 profile is detected in
+        # system_profiler. We deliberately drop the previous
+        # ``pass_if_source=Source.AUTOUPDATE`` fallback — having MAU logs
+        # only proves MAU is installed, not that policy is enforced.
+        pass_pattern=r"com\.microsoft\.autoupdate2",
+        ground_truth_marker=r"system_profiler.*SPConfigurationProfileDataType.*collected",
+        match_word=False,
         remediation_steps=(
-            "Deploy a settings-catalog profile for `com.microsoft.autoupdate2` "
-            "with `HowToCheck = AutomaticDownload`.",
-            "On the device, confirm: `defaults read com.microsoft.autoupdate2 "
-            "HowToCheck` returns `AutomaticDownload`.",
-            "Run `msupdate --list` to see queued updates; "
-            "`msupdate --install` to apply now.",
+            "In Intune ▸ **Devices ▸ Configuration profiles**, deploy a "
+            "settings-catalog profile for `com.microsoft.autoupdate2` with "
+            "`HowToCheck = AutomaticDownload`.",
+            "On the Mac, run `system_profiler SPConfigurationProfileDataType "
+            "| grep -i autoupdate2` and confirm the payload is present.",
+            "Spot-check the enforced value: `defaults read "
+            "com.microsoft.autoupdate2 HowToCheck` should return "
+            "`AutomaticDownload`.",
+            "Re-collect with `--live` and re-run the analyzer to confirm "
+            "the control returns to PASS.",
         ),
         false_positive_note=(
-            "If Microsoft AutoUpdate is **deployed** (logs are present) and "
-            "no `MAU-DISABLED` signal fires, the control passes — transient "
-            "`-1100` CDN download failures do not by themselves mean MAU is "
-            "broken."),
+            "This control is now a *policy-enforcement* check, not a "
+            "MAU-is-installed check. It will be **not-assessed** on offline "
+            "bundles that don't include `system_profiler "
+            "SPConfigurationProfileDataType` output, and it will be **FAIL** "
+            "in live runs that show the dump but no `autoupdate2` payload. "
+            "Transient `-1100` CDN download failures from MAU do not affect "
+            "this verdict."),
     ),
 
     # --- 2 System Settings & Hardening ------------------------------------ #
@@ -530,6 +556,21 @@ def evaluate(findings: list[Finding], entries: list[LogEntry],
             evidence.append(
                 f"{spec.pass_if_source.value} logs present with no contrary "
                 "signal for this control.")
+
+        # 3b. Ground-truth marker. When the collector proved it inspected the
+        # authoritative data (e.g. ``system_profiler``) but no pass evidence
+        # was found, the policy is provably *not* enforced — flip to FAIL.
+        if status == "not-assessed" and spec.ground_truth_marker:
+            marker_rx = re.compile(spec.ground_truth_marker, spec.flags)
+            for e in entries:
+                if marker_rx.search(e.raw or e.message):
+                    status = "fail"
+                    evidence.insert(0, (
+                        "Authoritative policy data was inspected "
+                        f"({e.file or 'ground-truth source'}) but the "
+                        "required policy / DDM declaration was not found "
+                        "— policy is not enforced."))
+                    break
 
         # 4. Demote a "fail" verdict to "configured" if every contributing
         # finding was transient (e.g. one-off MAU CDN retry).

@@ -19,6 +19,7 @@ import datetime as _dt
 import os
 import re
 
+from . import apple_ddm
 from . import cis as cis_module
 from .collector import CollectionResult
 from .models import (AnalysisResult, Finding, Level, Severity, Source,
@@ -117,6 +118,7 @@ class Analyzer:
             # full match set — not just the evidence sample — so the report
             # lists every impacted item even when the evidence is truncated.
             impacted: list[str] = []
+            subject_label = rule.subject_label
             if subj_rx is not None:
                 seen: set[str] = set()
                 for e in matches:
@@ -124,11 +126,34 @@ class Analyzer:
                     m = subj_rx.search(hay)
                     if not m:
                         continue
-                    name = m.group(1).strip()
+                    # subject_pattern may use multiple alternates; pick the
+                    # first non-empty capture group.
+                    name = next((g for g in m.groups() if g), "").strip()
                     if not name or name in seen:
                         continue
                     seen.add(name)
                     impacted.append(name)
+
+            # For the macOS software-update rule, also decode each evidence
+            # line through the Apple-DDM failure-reason table so the report
+            # surfaces human-readable causes (download-failed, ScanNoUpdateFound,
+            # 7301/7509 codes, …) instead of just raw text. Sourced from
+            # apple/device-management ``softwareupdate.failure-reason.yaml``.
+            if rule.id == "SWUPDATE-FAIL":
+                decoded_seen: set[str] = set()
+                decoded_reasons: list[str] = []
+                for e in matches:
+                    for human in apple_ddm.decode_failure_reasons(
+                            e.raw or e.message):
+                        if human in decoded_seen:
+                            continue
+                        decoded_seen.add(human)
+                        decoded_reasons.append(human)
+                if decoded_reasons:
+                    impacted = decoded_reasons + [
+                        x for x in impacted if x not in decoded_seen
+                    ]
+                    subject_label = subject_label or "Failure reasons"
             out.append(Finding(
                 id=rule.id,
                 severity=rule.severity,
@@ -144,7 +169,7 @@ class Analyzer:
                 false_positive_note=rule.false_positive_note,
                 transient=rule.transient,
                 impacted=impacted,
-                subject_label=rule.subject_label,
+                subject_label=subject_label,
             ))
         return out
 

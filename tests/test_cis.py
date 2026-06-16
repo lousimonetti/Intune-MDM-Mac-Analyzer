@@ -65,20 +65,18 @@ def test_evaluate_pass_if_source_and_finding_fail():
 
 
 def test_transient_finding_demotes_fail_to_configured():
-    # MAU is configured (logs present); the only signal is a transient
-    # download failure — control should land at CONFIGURED, not FAIL.
-    f = Finding(id="MAU-UPDATE-FAIL", severity=Severity.LOW,
-                source=Source.AUTOUPDATE, title="MAU update failure",
+    # When a transient SWUPDATE-FAIL is the only signal, the FAIL verdict
+    # for CIS-1.1 must be demoted to CONFIGURED (self-healing retry, not a
+    # real policy break).
+    f = Finding(id="SWUPDATE-FAIL", severity=Severity.LOW,
+                source=Source.SYSTEM, title="macOS update transient failure",
                 description="d", recommendation="r",
-                evidence=["2026-06-05  download failed -1100"],
+                evidence=["2026-06-05  retry softwareupdated -1100"],
                 transient=True)
-    # Note: in the current CIS spec MAU-UPDATE-FAIL is no longer a fail
-    # mapping for CIS-1.2 (we treat MAU presence as the control); confirm
-    # the result is configured, not fail.
-    rep = cis.evaluate([f], [], {Source.AUTOUPDATE})
+    rep = cis.evaluate([f], [], {Source.SYSTEM})
     by_id = {c.id: c for c in rep.checks}
-    assert by_id["CIS-1.2"].status == "configured"
-    assert by_id["CIS-1.2"].status != "fail"
+    assert by_id["CIS-1.1"].status == "configured"
+    assert by_id["CIS-1.1"].status != "fail"
 
 
 def test_ignore_suppresses_finding_and_control():
@@ -130,35 +128,80 @@ def test_evaluate_pattern_pass_fail_and_not_assessed():
     assert {c.id: c.status for c in none.checks}["CIS-2.5.2"] == "not-assessed"
 
 
-def test_cis_1_1_treats_7301_as_pass_evidence():
-    # `SUMacControllerError Code=7301` / `ScanNoUpdateFound` is the macOS
-    # softwareupdate framework reporting "no updates available" — i.e. the
-    # device IS up to date. CIS-1.1 must accept it as PASS, not noise.
-    e = LogEntry(source=Source.AUTOUPDATE, level=Level.ERROR,
-                 message="majorError: Error Domain=SUMacControllerError "
-                         "Code=7301 \"scan for major software update failed: "
-                         "no updates available\"",
-                 raw="majorError: Error Domain=SUMacControllerError "
-                     "Code=7301 \"scan for major software update failed\"")
-    rep = cis.evaluate([], [e], {Source.AUTOUPDATE})
-    by_id = {c.id: c for c in rep.checks}
-    assert by_id["CIS-1.1"].status == "pass"
-    # The PASS verdict must NOT also produce a FAIL — the fail_pattern was
-    # narrow enough to ignore this line.
-    assert by_id["CIS-1.1"].status != "fail"
-
-    # And the bare `ScanNoUpdateFound` token is also accepted.
-    e2 = LogEntry(source=Source.AUTOUPDATE, level=Level.ERROR,
-                  message="softwareupdate scan: SUMacControllerErrorScanNoUpdateFound",
-                  raw="softwareupdate scan: SUMacControllerErrorScanNoUpdateFound")
-    rep2 = cis.evaluate([], [e2], {Source.AUTOUPDATE})
-    assert {c.id: c.status for c in rep2.checks}["CIS-1.1"] == "pass"
+def test_cis_1_1_passes_on_ddm_softwareupdate_payload():
+    # Policy-enforcement check: the DDM software-update declaration shows up
+    # in system_profiler -> PASS.
+    marker = LogEntry(
+        source=Source.SYSTEM, level=Level.INFO,
+        message="system_profiler SPConfigurationProfileDataType collected",
+        raw="system_profiler:SPConfigurationProfileDataType:collected",
+        file="<system_profiler SPConfigurationProfileDataType>",
+    )
+    payload = LogEntry(
+        source=Source.SYSTEM, level=Level.INFO,
+        message="PayloadType: com.apple.configuration.softwareupdate."
+                "enforcement.specific",
+        raw="PayloadType: com.apple.configuration.softwareupdate."
+            "enforcement.specific",
+        file="<system_profiler SPConfigurationProfileDataType>",
+    )
+    rep = cis.evaluate([], [marker, payload], {Source.SYSTEM})
+    assert {c.id: c.status for c in rep.checks}["CIS-1.1"] == "pass"
 
 
-def test_collector_extracts_only_ddm_softwareupdate_lines():
-    # The system_profiler dump is large; we must ingest *only* the lines
-    # that prove a DDM software-update declaration is installed, not the
-    # entire dump.
+def test_cis_1_1_fails_when_system_profiler_collected_but_no_payload():
+    # Ground-truth marker fires but no software-update payload is present
+    # in the system_profiler dump -> policy is provably not enforced ->
+    # FAIL (not "not-assessed").
+    marker = LogEntry(
+        source=Source.SYSTEM, level=Level.INFO,
+        message="system_profiler SPConfigurationProfileDataType collected",
+        raw="system_profiler:SPConfigurationProfileDataType:collected",
+        file="<system_profiler SPConfigurationProfileDataType>",
+    )
+    rep = cis.evaluate([], [marker], {Source.SYSTEM})
+    assert {c.id: c.status for c in rep.checks}["CIS-1.1"] == "fail"
+
+
+def test_cis_1_1_not_assessed_without_system_profiler_evidence():
+    # Offline bundle without a system_profiler dump -> control is honestly
+    # not-assessed (not falsely PASS, not falsely FAIL).
+    rep = cis.evaluate([], [], set())
+    assert {c.id: c.status for c in rep.checks}["CIS-1.1"] == "not-assessed"
+
+
+def test_cis_1_2_passes_on_autoupdate2_payload():
+    marker = LogEntry(
+        source=Source.SYSTEM, level=Level.INFO,
+        message="system_profiler SPConfigurationProfileDataType collected",
+        raw="system_profiler:SPConfigurationProfileDataType:collected",
+        file="<system_profiler SPConfigurationProfileDataType>",
+    )
+    payload = LogEntry(
+        source=Source.SYSTEM, level=Level.INFO,
+        message="PayloadIdentifier: com.microsoft.autoupdate2.policy",
+        raw="PayloadIdentifier: com.microsoft.autoupdate2.policy",
+        file="<system_profiler SPConfigurationProfileDataType>",
+    )
+    rep = cis.evaluate([], [marker, payload], {Source.SYSTEM})
+    assert {c.id: c.status for c in rep.checks}["CIS-1.2"] == "pass"
+
+
+def test_cis_1_2_fails_when_autoupdate2_profile_absent():
+    marker = LogEntry(
+        source=Source.SYSTEM, level=Level.INFO,
+        message="system_profiler SPConfigurationProfileDataType collected",
+        raw="system_profiler:SPConfigurationProfileDataType:collected",
+        file="<system_profiler SPConfigurationProfileDataType>",
+    )
+    rep = cis.evaluate([], [marker], {Source.SYSTEM})
+    assert {c.id: c.status for c in rep.checks}["CIS-1.2"] == "fail"
+
+
+def test_collector_extracts_marker_and_relevant_payloads_only():
+    # The system_profiler dump is large; we must ingest *only* a single
+    # marker line + the lines that prove a relevant payload is installed.
+    # Unrelated profiles (firewall, generic MDM) must not be ingested.
     from intune_analyzer.collector import Collector
     dump = (
         "Configuration Profiles:\n"
@@ -168,6 +211,10 @@ def test_collector_extracts_only_ddm_softwareupdate_lines():
         "    PayloadType: com.apple.configuration.softwareupdate."
         "enforcement.specific\n"
         "    TargetOSVersion: 14.5\n"
+        "    TargetLocalDateTime: 2026-07-01T18:00:00\n"
+        "    Name: MAU Auto-Update\n"
+        "    PayloadIdentifier: com.microsoft.autoupdate2.policy\n"
+        "    HowToCheck: AutomaticDownload\n"
         "    Name: Firewall Baseline\n"
         "    PayloadType: com.apple.security.firewall\n"
     )
@@ -175,40 +222,92 @@ def test_collector_extracts_only_ddm_softwareupdate_lines():
     c._ingest_ddm_softwareupdate_evidence(dump, file="<system_profiler>")
     sources = {e.source for e in c.result.entries}
     assert sources == {Source.SYSTEM}
-    # Exactly one declaration line ingested — Firewall/mdm are not relevant.
+    # 1 marker + 1 DDM softwareupdate line + 1 autoupdate2 line = 3. The
+    # declaration is well-formed so no missing-key error entries appear.
+    # Firewall and generic MDM lines must NOT be ingested.
+    assert len(c.result.entries) == 3
+    msgs = " | ".join(e.message for e in c.result.entries)
+    assert "SPConfigurationProfileDataType collected" in msgs
+    assert "softwareupdate.enforcement.specific" in msgs
+    assert "com.microsoft.autoupdate2" in msgs
+    assert "firewall" not in msgs.lower()
+    err = [e for e in c.result.entries if e.level.value == "error"]
+    assert err == []
+
+
+def test_collector_emits_missing_key_error_for_incomplete_declaration():
+    # When a softwareupdate.enforcement.specific PayloadType is present but
+    # neither TargetOSVersion nor TargetLocalDateTime appears in the
+    # surrounding lines, the collector must emit an ERROR-level synthetic
+    # entry per missing required key. Apple's schema flags both as required:
+    # github.com/apple/device-management/.../softwareupdate.enforcement.specific.yaml
+    from intune_analyzer.collector import Collector
+    dump = (
+        "Configuration Profiles:\n"
+        "    Name: macOS Update Enforcement\n"
+        "    PayloadType: com.apple.configuration.softwareupdate."
+        "enforcement.specific\n"
+        "    DetailsURL: https://example.com\n"
+        "    (declaration body is incomplete here)\n"
+    )
+    c = Collector()
+    c._ingest_ddm_softwareupdate_evidence(dump, file="<system_profiler>")
+    err_entries = [e for e in c.result.entries if e.level.value == "error"]
+    assert len(err_entries) == 2
+    missing = {e.raw for e in err_entries}
+    assert any("TargetOSVersion" in r for r in missing)
+    assert any("TargetLocalDateTime" in r for r in missing)
+
+
+def test_collector_does_not_flag_complete_declaration():
+    # A well-formed declaration with both required keys present must NOT
+    # emit any error entries.
+    from intune_analyzer.collector import Collector
+    dump = (
+        "Configuration Profiles:\n"
+        "    Name: macOS Update Enforcement\n"
+        "    PayloadType: com.apple.configuration.softwareupdate."
+        "enforcement.specific\n"
+        "    TargetOSVersion: 14.5\n"
+        "    TargetLocalDateTime: 2026-07-01T18:00:00\n"
+        "    DetailsURL: https://example.com\n"
+    )
+    c = Collector()
+    c._ingest_ddm_softwareupdate_evidence(dump, file="<system_profiler>")
+    err_entries = [e for e in c.result.entries if e.level.value == "error"]
+    assert err_entries == []
+
+
+def test_swupdate_fail_decodes_human_reasons(tmp_path):
+    # SWUPDATE-FAIL evidence should be decoded through the Apple-DDM
+    # failure-reason table so the report shows human-readable causes.
+    install = tmp_path / "system"
+    install.mkdir()
+    (install / "install.log").write_text(
+        "Jun 15 12:00:01 mac softwareupdated[101]: "
+        "softwareupdate.failure-reason: download-failed\n"
+        "Jun 15 12:00:02 mac softwareupdated[101]: "
+        "softwareupdate.failure-reason: install-failed\n"
+    )
+    res = run_analysis(input_path=str(install))
+    by_id = {f.id: f for f in res.findings}
+    assert "SWUPDATE-FAIL" in by_id
+    f = by_id["SWUPDATE-FAIL"]
+    assert f.subject_label == "Failure reasons"
+    joined = " | ".join(f.impacted)
+    assert "Download failed" in joined
+    assert "Install failed" in joined
+
+
+def test_collector_emits_marker_even_when_no_payload_found():
+    # Empty profile inventory still emits the ground-truth marker so the
+    # evaluator can flip CIS-1.1 / CIS-1.2 to FAIL (policy not enforced).
+    from intune_analyzer.collector import Collector
+    dump = "Configuration Profiles:\n    (none)\n"
+    c = Collector()
+    c._ingest_ddm_softwareupdate_evidence(dump, file="<system_profiler>")
     assert len(c.result.entries) == 1
-    assert "softwareupdate.enforcement.specific" in c.result.entries[0].message
-
-
-def test_cis_1_1_passes_on_ddm_softwareupdate_declaration():
-    # `system_profiler SPConfigurationProfileDataType` exposes installed
-    # configuration profiles + DDM declarations. When a software-update
-    # enforcement declaration is present, that proves the policy is
-    # *deployed* and CIS-1.1 must mark PASS — even without a runtime 7301
-    # signal.
-    e = LogEntry(
-        source=Source.SYSTEM, level=Level.INFO,
-        message="PayloadType: com.apple.configuration.softwareupdate."
-                "enforcement.specific",
-        raw="PayloadType: com.apple.configuration.softwareupdate."
-            "enforcement.specific",
-        file="<system_profiler SPConfigurationProfileDataType>",
-        component="system_profiler",
-    )
-    rep = cis.evaluate([], [e], {Source.SYSTEM})
-    by_id = {c.id: c.status for c in rep.checks}
-    assert by_id["CIS-1.1"] == "pass"
-
-    # The shorter `softwareupdate.settings` declaration name also satisfies.
-    e2 = LogEntry(
-        source=Source.SYSTEM, level=Level.INFO,
-        message="com.apple.configuration.softwareupdate.settings present",
-        raw="com.apple.configuration.softwareupdate.settings present",
-        file="<system_profiler SPConfigurationProfileDataType>",
-        component="system_profiler",
-    )
-    rep2 = cis.evaluate([], [e2], {Source.SYSTEM})
-    assert {c.id: c.status for c in rep2.checks}["CIS-1.1"] == "pass"
+    assert "SPConfigurationProfileDataType collected" in c.result.entries[0].message
 
 
 def test_analysis_result_has_cis_and_client_mode_matches():
