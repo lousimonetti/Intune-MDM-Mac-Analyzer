@@ -145,6 +145,35 @@ def test_packagekit_hosted_team_is_low_not_high(tmp_path):
     assert by_id["INSTALL-TEAM-RESPONSIBILITY"].severity == Severity.LOW
 
 
+def test_install_fail_names_the_failing_package(tmp_path):
+    # PackageKit emits the package identity on lines *preceding* the failing
+    # postinstall/exit-code line. INSTALL-FAIL must walk back in the same
+    # file and surface the .pkg / bundle ID on the finding so the user can
+    # tell *which* package failed without grepping install.log themselves.
+    system = tmp_path / "system"
+    system.mkdir()
+    (system / "install.log").write_text(
+        "2026-06-16 12:00:00 mac installd[200]: PackageKit: "
+        "Begin install: file:///private/var/folders/.../AcmeAgent.pkg\n"
+        "2026-06-16 12:00:00 mac installd[200]: PackageKit: --- "
+        "Path: /private/var/folders/AB/CD/AcmeAgent.pkg\n"
+        "2026-06-16 12:00:00 mac installd[200]: PackageKit: --- "
+        "ID: com.acme.agent\n"
+        "2026-06-16 12:00:01 mac package_script_service[84432]: "
+        "./postinstall: Unload failed: 5: Input/output error\n"
+        "2026-06-16 12:00:02 mac installd[200]: PackageKit: "
+        "Install Failed: returned non-zero exit code 1\n"
+    )
+    res = run_analysis(input_path=str(system))
+    by_id = {f.id: f for f in res.findings}
+    assert "INSTALL-FAIL" in by_id
+    f = by_id["INSTALL-FAIL"]
+    assert f.subject_label == "Packages"
+    # The .pkg path captures first (Path: line) — and the bundle ID is also
+    # available as a fallback.
+    assert "AcmeAgent.pkg" in f.impacted
+
+
 def test_mau_major_scan_noise_is_filtered(tmp_path):
     # MAU's "scan for major (macOS) update" path queries the system
     # softwareupdate framework and logs SUMacControllerError Code=7301

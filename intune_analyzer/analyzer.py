@@ -134,6 +134,24 @@ class Analyzer:
                     seen.add(name)
                     impacted.append(name)
 
+            # For PackageKit installer failures, the failing line itself
+            # (``./postinstall: Unload failed …``) rarely names the package.
+            # ``/var/log/install.log`` puts the package identity on the
+            # preceding ``PackageKit:`` lines (``--- Path: …/X.pkg``,
+            # ``--- ID: com.foo.bar``, ``Begin install: file://X.pkg``), so
+            # walk backwards in the same file for the nearest such line and
+            # surface the package name on the finding.
+            if rule.id == "INSTALL-FAIL":
+                pkg_subjects = _correlate_install_packages(entries, matches)
+                if pkg_subjects:
+                    seen_pkg = set(impacted)
+                    for name in pkg_subjects:
+                        if name in seen_pkg:
+                            continue
+                        seen_pkg.add(name)
+                        impacted.append(name)
+                    subject_label = subject_label or "Packages"
+
             # For the macOS software-update rule, also decode each evidence
             # line through the Apple-DDM failure-reason table so the report
             # surfaces human-readable causes (download-failed, ScanNoUpdateFound,
@@ -394,6 +412,87 @@ def _file_hint(path: str) -> str:
     base = os.path.basename(path)
     parent = os.path.basename(os.path.dirname(path)) if path else ""
     return f"{parent}/{base}".lstrip("/")
+
+
+# Patterns used to recover the package identity from PackageKit context
+# lines that *precede* the actual failure line in /var/log/install.log.
+# Each captures one form of identity; the analyzer picks whichever is found
+# first when walking backwards from the failing line.
+_PKG_CONTEXT_PATTERNS = (
+    # ``PackageKit: --- Path: /private/var/folders/.../Foo.pkg``
+    re.compile(r"Path:\s*([^\s,;]+\.pkg)\b", re.IGNORECASE),
+    # ``PackageKit: --- Package: /path/Foo.pkg`` (older format)
+    re.compile(r"Package:\s*([^\s,;]+\.pkg)\b", re.IGNORECASE),
+    # ``PackageKit: Begin install[er] file://…/Foo.pkg`` or
+    # ``PackageKit: Begin install: …/Foo.pkg``
+    re.compile(r"Begin\s+install(?:er|:)?[^\n]*?([^\s/]+\.pkg)\b", re.IGNORECASE),
+    # ``PackageKit: --- ID: com.foo.bar``
+    re.compile(r"\bID:\s*([A-Za-z0-9][\w.\-]+\.[\w.\-]+)\b"),
+)
+
+# How many entries back in the same file we'll walk looking for context.
+# /var/log/install.log emits about a dozen PackageKit lines per package
+# install — 200 lines is a comfortable upper bound that still bounds work.
+_INSTALL_CONTEXT_WINDOW = 200
+
+
+def _correlate_install_packages(all_entries, matches) -> list[str]:
+    """Recover the package name(s) being installed when an INSTALL-FAIL line
+    fires. Returns a de-duplicated list in match order.
+
+    For each failing entry we scan backwards through entries in the *same
+    file* (PackageKit context lines that precede the failure) and take the
+    first match against :data:`_PKG_CONTEXT_PATTERNS`.
+    """
+    by_file: dict[str, list] = {}
+    for e in all_entries:
+        if not e.file:
+            continue
+        by_file.setdefault(e.file, []).append(e)
+    for lst in by_file.values():
+        lst.sort(key=lambda x: x.line_no)
+
+    # The .pkg patterns are listed first in _PKG_CONTEXT_PATTERNS; the
+    # bundle-ID pattern is last. When walking backwards we prefer the .pkg
+    # form even if a bundle ID appears closer to the failure, because the
+    # filename is the most recognisable identity for an operator.
+    pkg_pattern_count = len(_PKG_CONTEXT_PATTERNS) - 1
+
+    found: list[str] = []
+    seen: set[str] = set()
+    for m in matches:
+        siblings = by_file.get(m.file, [])
+        if not siblings:
+            continue
+        try:
+            idx = next(i for i, e in enumerate(siblings)
+                       if e.line_no == m.line_no)
+        except StopIteration:
+            continue
+        start = max(0, idx - _INSTALL_CONTEXT_WINDOW)
+        pkg_name: str | None = None
+        bundle_id_fallback: str | None = None
+        for j in range(idx - 1, start - 1, -1):
+            hay = siblings[j].raw or siblings[j].message
+            for ix, rx in enumerate(_PKG_CONTEXT_PATTERNS):
+                hit = rx.search(hay)
+                if not hit:
+                    continue
+                name = hit.group(1).strip()
+                if ix < pkg_pattern_count:
+                    # Strip the staging directory — operators recognise the
+                    # filename, not the /private/var/folders/... path.
+                    pkg_name = os.path.basename(name) or name
+                    break
+                if bundle_id_fallback is None:
+                    bundle_id_fallback = name
+            if pkg_name:
+                break
+        chosen = pkg_name or bundle_id_fallback
+        if chosen and chosen not in seen:
+            seen.add(chosen)
+            found.append(chosen)
+    return found
 
 
 # Patterns used to collapse near-duplicate error messages into a single
