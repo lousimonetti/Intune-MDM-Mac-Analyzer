@@ -115,17 +115,26 @@ CIS_LEVEL1: list[CISCheck] = [
                      r"software ?update.*\b(install|download)\b.*\b(fail|"
                      r"failure|error)\b|"
                      r"failed to (download|install).*(os update|macos update)",
-        # ``SUMacControllerError Code=7301`` / ``ScanNoUpdateFound`` is the
-        # macOS softwareupdate framework saying "there is nothing to offer" —
-        # i.e. the device IS up to date. When Apple DDM is enforcing OS
-        # updates this is the authoritative positive signal, so it counts as
-        # PASS evidence for CIS-1.1.
+        # PASS evidence comes from three places, any of which is enough:
+        #   1. The system reporting it is up to date (text installed /
+        #      "up to date" / "succeeded").
+        #   2. ``SUMacControllerError Code=7301`` / ``ScanNoUpdateFound`` —
+        #      macOS softwareupdate framework saying "nothing to offer", the
+        #      authoritative runtime signal when DDM enforces OS updates.
+        #   3. A live ``system_profiler`` dump showing a DDM software-update
+        #      enforcement declaration is installed
+        #      (``com.apple.configuration.softwareupdate.enforcement.specific``
+        #      / ``softwareupdate.settings``). This proves the policy is
+        #      *deployed*, complementing the runtime 7301 signal.
         pass_pattern=r"software ?update.*\b(installed|up to date|succeeded|"
                      r"already up-?to-?date)\b|"
                      r"SUMacControllerError.*\bCode=7301\b|"
                      r"\bCode=7301\b.*SUMacControllerError|"
                      r"SUMacControllerErrorScanNoUpdateFound|"
-                     r"\bScanNoUpdateFound\b",
+                     r"\bScanNoUpdateFound\b|"
+                     r"com\.apple\.configuration\.softwareupdate\."
+                     r"(enforcement\.specific|settings)|"
+                     r"softwareupdate\.enforcement\.specific",
         match_word=False,
         remediation_steps=(
             "Run `softwareupdate --list` on the Mac and confirm any "
@@ -142,8 +151,12 @@ CIS_LEVEL1: list[CISCheck] = [
             "two clients and is ignored. `SUMacControllerErrorScanNoUpdateFound "
             "(7301)` is the system reporting **the device is up-to-date** — "
             "when Apple DDM is enforcing OS updates this is the authoritative "
-            "positive signal, so it now counts as PASS evidence for this "
-            "control rather than noise."),
+            "positive signal and counts as PASS. In live (`--live`) runs, the "
+            "presence of a DDM software-update enforcement declaration in "
+            "`system_profiler SPConfigurationProfileDataType` "
+            "(`com.apple.configuration.softwareupdate.enforcement.specific` "
+            "or `…softwareupdate.settings`) is also accepted as PASS — it "
+            "proves the policy is deployed even if no scan has happened yet."),
     ),
     CISCheck(
         id="CIS-1.2",

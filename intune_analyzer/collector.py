@@ -201,6 +201,70 @@ class Collector:
                 ))
             self.result.notes.append("Captured `app-sso platform -s` output.")
 
+        # system_profiler SPConfigurationProfileDataType — proves which MDM
+        # profiles and DDM declarations are *actually installed* on the
+        # device, independent of whatever the logs happen to show. We don't
+        # ingest the whole dump (several MB); only the lines that prove a
+        # Declarative Device Management software-update enforcement
+        # declaration is in place, so the CIS-1.1 evaluator can mark the
+        # control PASS on positive policy evidence rather than waiting for a
+        # runtime scan signal.
+        out = _run(["system_profiler", "SPConfigurationProfileDataType",
+                    "-detailLevel", "mini"])
+        if out:
+            self._ingest_ddm_softwareupdate_evidence(
+                out, file="<system_profiler SPConfigurationProfileDataType>")
+
+        # `profiles status -type enrollment` — concise MDM enrollment state.
+        out = _run(["profiles", "status", "-type", "enrollment"])
+        if out:
+            for line in out.splitlines():
+                if not line.strip():
+                    continue
+                low = line.lower()
+                lvl = Level.INFO
+                if "not enrolled" in low or "no enrollment" in low:
+                    lvl = Level.ERROR
+                self.result.entries.append(LogEntry(
+                    source=Source.SYSTEM, level=lvl,
+                    message=line.strip(), component="profiles status",
+                    file="<profiles status -type enrollment>", raw=line,
+                ))
+            self.result.notes.append(
+                "Captured `profiles status -type enrollment` output.")
+
+    def _ingest_ddm_softwareupdate_evidence(self, dump: str, *, file: str) -> None:
+        """Scan a ``system_profiler SPConfigurationProfileDataType`` dump for
+        any declarative software-update enforcement declarations and emit a
+        single ``Source.SYSTEM`` evidence entry per match.
+
+        We deliberately ingest *only* the marker lines (not the whole dump,
+        which can be megabytes) — the CIS evaluator's pass_pattern picks up
+        the declaration name and credits CIS-1.1.
+        """
+        markers = (
+            "com.apple.configuration.softwareupdate.enforcement.specific",
+            "com.apple.configuration.softwareupdate.settings",
+            "softwareupdate.enforcement.specific",
+        )
+        seen = False
+        for line in dump.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            low = stripped.lower()
+            if any(m in low for m in markers):
+                self.result.entries.append(LogEntry(
+                    source=Source.SYSTEM, level=Level.INFO,
+                    message=stripped, component="system_profiler",
+                    file=file, raw=stripped,
+                ))
+                seen = True
+        if seen:
+            self.result.notes.append(
+                "DDM softwareupdate enforcement declaration detected via "
+                "`system_profiler SPConfigurationProfileDataType`.")
+
 
 def _run(cmd: list[str]) -> Optional[str]:
     try:

@@ -155,6 +155,62 @@ def test_cis_1_1_treats_7301_as_pass_evidence():
     assert {c.id: c.status for c in rep2.checks}["CIS-1.1"] == "pass"
 
 
+def test_collector_extracts_only_ddm_softwareupdate_lines():
+    # The system_profiler dump is large; we must ingest *only* the lines
+    # that prove a DDM software-update declaration is installed, not the
+    # entire dump.
+    from intune_analyzer.collector import Collector
+    dump = (
+        "Configuration Profiles:\n"
+        "    Name: Intune MDM Profile\n"
+        "    PayloadType: com.apple.mdm\n"
+        "    Name: macOS Update Enforcement\n"
+        "    PayloadType: com.apple.configuration.softwareupdate."
+        "enforcement.specific\n"
+        "    TargetOSVersion: 14.5\n"
+        "    Name: Firewall Baseline\n"
+        "    PayloadType: com.apple.security.firewall\n"
+    )
+    c = Collector()
+    c._ingest_ddm_softwareupdate_evidence(dump, file="<system_profiler>")
+    sources = {e.source for e in c.result.entries}
+    assert sources == {Source.SYSTEM}
+    # Exactly one declaration line ingested — Firewall/mdm are not relevant.
+    assert len(c.result.entries) == 1
+    assert "softwareupdate.enforcement.specific" in c.result.entries[0].message
+
+
+def test_cis_1_1_passes_on_ddm_softwareupdate_declaration():
+    # `system_profiler SPConfigurationProfileDataType` exposes installed
+    # configuration profiles + DDM declarations. When a software-update
+    # enforcement declaration is present, that proves the policy is
+    # *deployed* and CIS-1.1 must mark PASS — even without a runtime 7301
+    # signal.
+    e = LogEntry(
+        source=Source.SYSTEM, level=Level.INFO,
+        message="PayloadType: com.apple.configuration.softwareupdate."
+                "enforcement.specific",
+        raw="PayloadType: com.apple.configuration.softwareupdate."
+            "enforcement.specific",
+        file="<system_profiler SPConfigurationProfileDataType>",
+        component="system_profiler",
+    )
+    rep = cis.evaluate([], [e], {Source.SYSTEM})
+    by_id = {c.id: c.status for c in rep.checks}
+    assert by_id["CIS-1.1"] == "pass"
+
+    # The shorter `softwareupdate.settings` declaration name also satisfies.
+    e2 = LogEntry(
+        source=Source.SYSTEM, level=Level.INFO,
+        message="com.apple.configuration.softwareupdate.settings present",
+        raw="com.apple.configuration.softwareupdate.settings present",
+        file="<system_profiler SPConfigurationProfileDataType>",
+        component="system_profiler",
+    )
+    rep2 = cis.evaluate([], [e2], {Source.SYSTEM})
+    assert {c.id: c.status for c in rep2.checks}["CIS-1.1"] == "pass"
+
+
 def test_analysis_result_has_cis_and_client_mode_matches():
     res = run_analysis(input_path=str(SAMPLES))
     assert res.cis is not None
