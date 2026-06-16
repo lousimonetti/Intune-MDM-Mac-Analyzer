@@ -755,6 +755,63 @@ RULES: list[Rule] = [
             "out of this rule."),
     ),
     Rule(
+        id="SWUPDATE-MDM-KEY-MISSING",
+        # Catches the synthetic ``mdm-validation: missing-key`` entries the
+        # collector emits when a legacy ``com.apple.SoftwareUpdate`` MDM
+        # payload is deployed but one or more CIS-Level-1-recommended keys
+        # are absent from the system_profiler dump. ``system_profiler``
+        # only emits keys explicitly set in the profile, so absence here
+        # means the key is at the macOS default and the policy is not
+        # actually enforcing it. Validation mirrors the approach used in
+        # MiniMacTest_v0.0.19.zsh (BEGIN_SETTING_DATA — CIS Software Update).
+        source=Source.SYSTEM,
+        pattern=r"mdm-validation:\s*missing-key\b|"
+                r"com\.apple\.SoftwareUpdate payload is missing "
+                r"CIS-recommended key",
+        # Subject extraction captures either form (synthetic ``key=value``
+        # in raw, or the human-readable ``key = value`` in message).
+        subject_pattern=r"missing-key (\S+?)=|"
+                        r"missing CIS-recommended key (\S+) =",
+        subject_label="CIS-recommended keys missing",
+        severity=Severity.MEDIUM,
+        title="CIS-recommended software-update keys are not enforced",
+        description="A legacy `com.apple.SoftwareUpdate` configuration "
+                    "profile is deployed but one or more CIS Level 1 §1.1 "
+                    "recommended keys are absent from the system_profiler "
+                    "dump. macOS only emits keys explicitly set in the "
+                    "profile — keys at their default value are not "
+                    "guaranteed to be enforced, so each value must be set "
+                    "explicitly in Intune.",
+        recommendation="Open the Intune `com.apple.SoftwareUpdate` "
+                       "configuration profile and explicitly set each "
+                       "CIS-recommended key listed above; re-collect with "
+                       "`--live` to confirm.",
+        remediation_steps=(
+            "In Intune ▸ **Devices ▸ Configuration profiles ▸ "
+            "<your software-update profile>**, ensure every key in CIS "
+            "macOS Benchmark §1.1 is present *and* set to the recommended "
+            "value (not left at default).",
+            "On the Mac, verify with `system_profiler "
+            "SPConfigurationProfileDataType | grep -E "
+            "'(AllowPreReleaseInstallation|AutomaticCheckEnabled|"
+            "AutomaticDownload|AutomaticallyInstall(App|MacOS)Updates|"
+            "ConfigDataInstall|CriticalUpdateInstall) ='` — every "
+            "expected key should appear.",
+            "Re-deploy the corrected profile, force a check-in, and "
+            "re-collect with `--live`; the control flips back to a clean "
+            "PASS once every key is enforced.",
+        ),
+        category="Updates",
+        docs_url="https://www.cisecurity.org/benchmark/apple_os",
+        false_positive_note=(
+            "Only emitted when a legacy `com.apple.SoftwareUpdate` payload "
+            "is detected in `system_profiler`. Fleets that have migrated "
+            "entirely to DDM (`com.apple.configuration.softwareupdate."
+            "enforcement.specific`) won't trigger this rule — the DDM "
+            "declaration enforces the equivalent settings on its own."
+        ),
+    ),
+    Rule(
         id="DDM-SWUPDATE-INCOMPLETE",
         # Catches the synthetic ``ddm-validation: missing-key`` entries the
         # collector emits when a ``softwareupdate.enforcement.specific``

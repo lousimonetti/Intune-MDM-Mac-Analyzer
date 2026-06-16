@@ -259,6 +259,57 @@ def test_collector_emits_missing_key_error_for_incomplete_declaration():
     assert any("TargetLocalDateTime" in r for r in missing)
 
 
+def test_collector_flags_missing_legacy_softwareupdate_keys():
+    # Legacy com.apple.SoftwareUpdate payload is deployed but explicit key
+    # values are missing -> emit one ERROR per missing key. Mirrors the
+    # MiniMacTest_v0.0.19.zsh grep-based validation logic.
+    from intune_analyzer.collector import Collector
+    dump = (
+        "Configuration Profiles:\n"
+        "    Name: PRD.MAC.SOFTWAREUPDATE\n"
+        "    PayloadType: com.apple.SoftwareUpdate\n"
+        "    AutomaticCheckEnabled = 1\n"
+        "    AutomaticDownload = 1\n"
+        # The other CIS-recommended keys are absent — system_profiler omits
+        # default-value keys, so absence means "not enforced".
+    )
+    c = Collector()
+    c._ingest_ddm_softwareupdate_evidence(dump, file="<system_profiler>")
+    err = [e for e in c.result.entries if e.level.value == "error"]
+    # 7 CIS-recommended keys - 2 present = 5 missing.
+    assert len(err) == 5
+    missing_keys = {e.raw.split("missing-key ", 1)[1].split("=", 1)[0]
+                    for e in err}
+    assert "AutomaticCheckEnabled" not in missing_keys
+    assert "AutomaticDownload" not in missing_keys
+    assert "AllowPreReleaseInstallation" in missing_keys
+    assert "CriticalUpdateInstall" in missing_keys
+
+
+def test_collector_flags_legacy_keys_drives_finding(tmp_path):
+    # End-to-end: the collector emits the synthetic missing-key entries
+    # and the SWUPDATE-MDM-KEY-MISSING rule picks them up.
+    from intune_analyzer.collector import Collector
+    c = Collector()
+    dump = (
+        "Configuration Profiles:\n"
+        "    Name: PRD.MAC.SOFTWAREUPDATE\n"
+        "    PayloadType: com.apple.SoftwareUpdate\n"
+        "    AutomaticCheckEnabled = 1\n"
+    )
+    c._ingest_ddm_softwareupdate_evidence(dump, file="<system_profiler>")
+    from intune_analyzer.analyzer import Analyzer
+    res = Analyzer().analyze(c.result)
+    by_id = {f.id: f for f in res.findings}
+    assert "SWUPDATE-MDM-KEY-MISSING" in by_id
+    f = by_id["SWUPDATE-MDM-KEY-MISSING"]
+    assert f.subject_label == "CIS-recommended keys missing"
+    assert "AutomaticDownload" in f.impacted
+    assert "CriticalUpdateInstall" in f.impacted
+    # The one key that IS explicitly set must NOT appear as missing.
+    assert "AutomaticCheckEnabled" not in f.impacted
+
+
 def test_collector_does_not_flag_complete_declaration():
     # A well-formed declaration with both required keys present must NOT
     # emit any error entries.

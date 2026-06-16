@@ -149,6 +149,22 @@ safe to email):
 neither is present it writes the HTML and points you at the browser's built-in
 "Save as PDF" — so PDF output is always achievable.
 
+**Apple Silicon caveat.** `weasyprint` needs the Cairo / Pango / GObject native
+stack, which isn't bundled with the Python wheel. If you see
+`cannot load library 'libgobject-2.0-0'` (or a similar `dlopen` error referring
+to `pango` / `cairo`), install the C libraries via Homebrew, then reinstall
+weasyprint:
+
+```bash
+brew install pango gdk-pixbuf libffi
+pip install -U weasyprint
+intune-analyzer --input ./logs --pdf report.pdf      # retry
+```
+
+The CLI now falls through to `wkhtmltopdf` (and finally the browser fallback)
+when weasyprint can't load its native libraries, so the command always succeeds
+in *some* form — but headless PDF requires the libraries above.
+
 ---
 
 ## CIS Level 1 validation

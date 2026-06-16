@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import subprocess
 import tempfile
 import zipfile
@@ -317,6 +318,42 @@ class Collector:
                     file=file,
                     raw=f"ddm-validation: missing-key {k}",
                 ))
+
+        # 2c. CIS-1.1 key-by-key validation of the legacy
+        # ``com.apple.SoftwareUpdate`` MDM payload. system_profiler omits
+        # any key left at its macOS default, so "key=value absent from the
+        # dump" is the failure signal — the policy is provably not enforcing
+        # that setting. Logic mirrors MiniMacTest_v0.0.19.zsh which greps
+        # the same dump for each expected key=value pair.
+        legacy_present = any(
+            "com.apple.softwareupdate" in m and ".configuration." not in m
+            for m in seen_payloads
+        )
+        if legacy_present:
+            dump_lower = dump.lower()
+            for key, value in (
+                apple_ddm.SOFTWAREUPDATE_MDM_RECOMMENDED_KEYS.items()
+            ):
+                # Tolerate the variations system_profiler uses:
+                #   ``AutomaticDownload = 1``
+                #   ``AutomaticDownload=1``
+                #   ``AutomaticDownload: 1``
+                token = re.compile(
+                    rf"\b{re.escape(key)}\s*[=:]\s*{re.escape(value)}\b",
+                    re.IGNORECASE,
+                )
+                if not token.search(dump_lower):
+                    self.result.entries.append(LogEntry(
+                        source=Source.SYSTEM, level=Level.ERROR,
+                        message=(
+                            "Legacy com.apple.SoftwareUpdate payload is "
+                            f"missing CIS-recommended key {key} = {value} "
+                            "(system_profiler omits keys at macOS default; "
+                            "set the value explicitly in the profile)"),
+                        component="system_profiler",
+                        file=file,
+                        raw=f"mdm-validation: missing-key {key}={value}",
+                    ))
 
         if seen_payloads:
             unique = sorted(set(seen_payloads))

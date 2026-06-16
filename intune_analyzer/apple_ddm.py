@@ -39,6 +39,35 @@ SOFTWAREUPDATE_ENFORCEMENT_OPTIONAL_KEYS: tuple[str, ...] = (
 )
 
 # ---------------------------------------------------------------------------
+# Legacy ``com.apple.SoftwareUpdate`` MDM payload — the pre-DDM way to enforce
+# software-update behaviour on macOS via a configuration profile.
+#
+# system_profiler ``SPConfigurationProfileDataType`` only emits keys that are
+# **explicitly set** in the deployed profile. Keys left at their macOS
+# default are absent from the output, so "key absent from dump" is treated
+# as "policy does not actually enforce this setting" — admins must set
+# every value explicitly even when the value matches the macOS default.
+#
+# The recommended key/value pairs below mirror CIS Apple macOS Benchmark
+# §1.1 ("Ensure all Apple-provided software is current"), cross-checked
+# against the MiniMacTest_v0.0.19.zsh validator
+# (BEGIN_SETTING_DATA — CIS Software Update section). Update both when CIS
+# revises the benchmark.
+# ---------------------------------------------------------------------------
+
+SOFTWAREUPDATE_LEGACY_PAYLOAD_TYPE = "com.apple.SoftwareUpdate"
+
+SOFTWAREUPDATE_MDM_RECOMMENDED_KEYS: dict[str, str] = {
+    "AllowPreReleaseInstallation": "0",
+    "AutomaticCheckEnabled": "1",
+    "AutomaticDownload": "1",
+    "AutomaticallyInstallAppUpdates": "1",
+    "AutomaticallyInstallMacOSUpdates": "1",
+    "ConfigDataInstall": "1",
+    "CriticalUpdateInstall": "1",
+}
+
+# ---------------------------------------------------------------------------
 # Software-update install state — canonical enum from the schema.
 #
 # Schema:

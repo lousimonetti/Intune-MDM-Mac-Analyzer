@@ -455,21 +455,38 @@ def export_pdf(html_content: str, out_path: str) -> tuple[bool, str]:
     """Try to render ``html_content`` to a PDF at ``out_path``.
 
     Returns ``(success, message)``. Tries weasyprint then wkhtmltopdf; if
-    neither is available, writes the HTML alongside and explains the
-    browser-based fallback rather than failing hard.
+    neither is available — or if weasyprint is installed but its native
+    libraries (``libgobject``, ``pango``, ``cairo``) can't be loaded, which
+    is a common Apple-Silicon failure mode — we **fall through** to the
+    next engine instead of giving up. The browser-based "Save as PDF"
+    fallback is always available so the user is never stuck.
     """
     out = Path(out_path)
-    # 1. weasyprint (pure-python, best fidelity for our CSS)
+    fallback_reasons: list[str] = []
+
+    # 1. weasyprint (pure-python, best fidelity for our CSS).
     try:
         from weasyprint import HTML  # type: ignore
         HTML(string=html_content).write_pdf(str(out))
         return True, f"PDF written via weasyprint: {out}"
     except ImportError:
-        pass
-    except Exception as exc:  # weasyprint present but failed
-        return False, f"weasyprint failed: {exc}"
+        fallback_reasons.append("weasyprint not installed")
+    except OSError as exc:
+        # The classic Apple-Silicon failure: ``cannot load library
+        # 'libgobject-2.0-0'``. weasyprint imported but its Cairo/Pango
+        # native stack is missing. Don't give up — keep falling through.
+        msg = str(exc)
+        if "libgobject" in msg or "pango" in msg.lower() or "cairo" in msg.lower():
+            fallback_reasons.append(
+                "weasyprint native libs missing — install with "
+                "`brew install pango gdk-pixbuf libffi` "
+                "(Apple Silicon) and retry")
+        else:
+            fallback_reasons.append(f"weasyprint OSError: {msg}")
+    except Exception as exc:  # weasyprint present but failed for another reason
+        fallback_reasons.append(f"weasyprint failed: {exc}")
 
-    # 2. wkhtmltopdf on PATH
+    # 2. wkhtmltopdf on PATH.
     wk = shutil.which("wkhtmltopdf")
     if wk:
         tmp_html = out.with_suffix(".tmp.html")
@@ -482,17 +499,26 @@ def export_pdf(html_content: str, out_path: str) -> tuple[bool, str]:
             )
             if proc.returncode == 0:
                 return True, f"PDF written via wkhtmltopdf: {out}"
-            return False, f"wkhtmltopdf failed: {proc.stderr.strip()}"
+            fallback_reasons.append(
+                f"wkhtmltopdf exit {proc.returncode}: "
+                f"{proc.stderr.strip() or 'no stderr'}")
         finally:
             tmp_html.unlink(missing_ok=True)
+    else:
+        fallback_reasons.append("wkhtmltopdf not on PATH")
 
-    # 3. Fallback: write HTML and instruct.
+    # 3. Fallback: write HTML alongside and instruct the user how to save
+    # it to PDF via the browser. The chain of upstream reasons is included
+    # so the user can diagnose why the dedicated engines didn't work.
     fallback = out.with_suffix(".html")
     fallback.write_text(html_content, encoding="utf-8")
+    detail = " · ".join(fallback_reasons) if fallback_reasons else "no engine tried"
     return False, (
-        "No PDF engine found (install 'weasyprint' or 'wkhtmltopdf'). "
+        f"No PDF engine succeeded ({detail}). "
         f"Wrote HTML to {fallback} — open it and use the browser's "
-        "'Save as PDF' button instead."
+        "'Save as PDF' button. "
+        "To enable headless PDF in future runs on Apple Silicon: "
+        "`brew install pango gdk-pixbuf libffi` then `pip install -U weasyprint`."
     )
 
 
