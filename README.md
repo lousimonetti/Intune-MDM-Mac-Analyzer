@@ -51,6 +51,42 @@ pip install -e ".[pdf]"     # optional: headless PDF export via weasyprint
 No install is required to try it — `python3 -m intune_analyzer ...` works from
 the repo root.
 
+### Updating the CLI
+
+The tool is installed in **editable** mode (`pip install -e .`), so updates are
+just a `git pull` — the next `intune-analyzer` invocation picks up the new code
+automatically, no reinstall needed.
+
+```bash
+cd Intune-MDM-Mac-Analyzer
+git pull --ff-only                    # fetch the latest changes
+intune-analyzer --version             # confirm the new version is live
+```
+
+Reinstall only when something outside the Python sources changes:
+
+```bash
+# Dependency / entry-point / extras change (rare)
+pip install -e . --upgrade
+pip install -e ".[pdf]" --upgrade     # if you use the optional PDF extra
+
+# Local virtualenv got into a bad state
+pip uninstall intune-analyzer && pip install -e .
+```
+
+Verifying the upgrade:
+
+```bash
+intune-analyzer --version             # CLI version banner
+pytest -q                             # full test suite (40+ tests, ~1s)
+python3 -m intune_analyzer --input samples --html /tmp/r.html
+                                      # smoke-test against the bundled samples
+```
+
+If you had local changes, rebase them first (`git fetch origin && git rebase
+origin/main`) — `git pull` defaults to a merge, which `--ff-only` will refuse if
+your branch has diverged. Resolve any conflicts before re-running.
+
 ---
 
 ## CLI usage
