@@ -259,6 +259,67 @@ def test_collector_emits_missing_key_error_for_incomplete_declaration():
     assert any("TargetLocalDateTime" in r for r in missing)
 
 
+def test_defaults_read_drives_cis_pass_and_missing_keys():
+    # Mirrors the user-reported `defaults read
+    # /Library/Preferences/com.apple.SoftwareUpdate.plist` output: only 4
+    # CIS-recommended keys are explicitly set. Expected behaviour:
+    #   * The 4 present keys count as PASS evidence for CIS-1.1.
+    #   * The remaining 3 CIS-recommended keys emit missing-key entries
+    #     that drive SWUPDATE-MDM-KEY-MISSING.
+    from intune_analyzer.collector import Collector
+    from intune_analyzer.analyzer import Analyzer
+    dump = (
+        "{\n"
+        "    AutomaticDownload = 1;\n"
+        "    AutomaticallyInstallMacOSUpdates = 1;\n"
+        "    ConfigDataInstall = 1;\n"
+        "    CriticalUpdateInstall = 1;\n"
+        "}\n"
+    )
+    c = Collector()
+    c._ingest_softwareupdate_defaults(
+        dump, file="<defaults read /Library/Preferences/com.apple.SoftwareUpdate.plist>")
+    res = Analyzer().analyze(c.result)
+    # CIS-1.1 must PASS — the defaults output proves managed-pref enforcement.
+    by_id = {ck.id: ck for ck in res.cis.checks}
+    assert by_id["CIS-1.1"].status == "pass"
+    # And SWUPDATE-MDM-KEY-MISSING must list the 3 absent keys.
+    findings_by_id = {f.id: f for f in res.findings}
+    assert "SWUPDATE-MDM-KEY-MISSING" in findings_by_id
+    miss = findings_by_id["SWUPDATE-MDM-KEY-MISSING"]
+    assert "AllowPreReleaseInstallation" in miss.impacted
+    assert "AutomaticCheckEnabled" in miss.impacted
+    assert "AutomaticallyInstallAppUpdates" in miss.impacted
+    # The 4 explicitly set keys must NOT appear as missing.
+    assert "AutomaticDownload" not in miss.impacted
+    assert "CriticalUpdateInstall" not in miss.impacted
+
+
+def test_defaults_read_with_all_keys_no_missing_finding():
+    # Fully-enforced plist: every CIS-recommended key is set to the
+    # expected value -> no SWUPDATE-MDM-KEY-MISSING and CIS-1.1 passes.
+    from intune_analyzer.collector import Collector
+    from intune_analyzer.analyzer import Analyzer
+    dump = (
+        "{\n"
+        "    AllowPreReleaseInstallation = 0;\n"
+        "    AutomaticCheckEnabled = 1;\n"
+        "    AutomaticDownload = 1;\n"
+        "    AutomaticallyInstallAppUpdates = 1;\n"
+        "    AutomaticallyInstallMacOSUpdates = 1;\n"
+        "    ConfigDataInstall = 1;\n"
+        "    CriticalUpdateInstall = 1;\n"
+        "}\n"
+    )
+    c = Collector()
+    c._ingest_softwareupdate_defaults(dump, file="<defaults read>")
+    res = Analyzer().analyze(c.result)
+    by_id = {ck.id: ck for ck in res.cis.checks}
+    assert by_id["CIS-1.1"].status == "pass"
+    finding_ids = {f.id for f in res.findings}
+    assert "SWUPDATE-MDM-KEY-MISSING" not in finding_ids
+
+
 def test_collector_flags_missing_legacy_softwareupdate_keys():
     # Legacy com.apple.SoftwareUpdate payload is deployed but explicit key
     # values are missing -> emit one ERROR per missing key. Mirrors the

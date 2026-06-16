@@ -161,15 +161,21 @@ Run `pytest` (25 tests). Try it: `python3 -m intune_analyzer --input samples`.
   cosmetic / historical signal?* and *What other finding would prove the
   product is healthy now?* If the answer to the second is "this other rule
   in `RULES`", add the cross-check to `_adjust_severity`.
-- **L11 — `system_profiler` omits default-value keys; absence == "not
-  enforced".** This is the single most load-bearing fact about validating
-  macOS MDM policies and it is non-obvious: when you read
-  `system_profiler SPConfigurationProfileDataType`, *only keys explicitly
-  set in the deployed profile appear in the output*. A key the admin left
-  at its macOS default — even when that default matches the recommended
-  value — is **absent**, and for the device the effective behaviour is
-  "policy does not enforce this setting" because the system can re-derive
-  the default in either direction.  Source: CIS-1.1 validator in
+- **L11 — `system_profiler` AND `defaults read` both omit default-value
+  keys; absence == "not enforced".** This is the single most load-bearing
+  fact about validating macOS MDM policies and it is non-obvious: when you
+  read `system_profiler SPConfigurationProfileDataType` *or*
+  `defaults read /Library/Managed Preferences/<bundle>.plist`
+  (or the on-disk `/Library/Preferences/<bundle>.plist`), **only keys
+  explicitly set in the deployed profile / plist appear in the output**.
+  A key the admin left at its macOS default — even when that default
+  matches the recommended value — is **absent**, and for the device the
+  effective behaviour is "policy does not enforce this setting" because
+  the system can re-derive the default in either direction. Both data
+  sources are independently authoritative for CIS-1.1; the collector
+  prefers Managed Preferences (live MDM-pushed values) over the on-disk
+  plist, and either is accepted as the ground-truth marker (CIS-1.1's
+  `ground_truth_marker` regex matches both).  Source: CIS-1.1 validator in
   `/Users/lou/Downloads/MiniMacTest_v0.0.19.zsh` (BEGIN_SETTING_DATA
   comment header — "keys at their default value are NOT emitted by
   system_profiler and will always fail this check"), confirmed empirically

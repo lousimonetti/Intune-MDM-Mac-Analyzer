@@ -234,6 +234,105 @@ class Collector:
             self.result.notes.append(
                 "Captured `profiles status -type enrollment` output.")
 
+        # `defaults read /Library/Preferences/com.apple.SoftwareUpdate.plist`
+        # — the effective enforced values for CIS §1.1 software-update
+        # settings. Same omission rule as system_profiler: only keys that
+        # are actually written into the plist appear in the output, so a
+        # missing key means "macOS default — not enforced".
+        # Prefer the Managed Preferences plist (what MDM pushed) when it
+        # exists, fall back to the on-disk preferences plist.
+        for plist_path, label in (
+            ("/Library/Managed Preferences/com.apple.SoftwareUpdate.plist",
+             "managed-prefs"),
+            ("/Library/Preferences/com.apple.SoftwareUpdate.plist",
+             "prefs"),
+        ):
+            out = _run(["defaults", "read", plist_path])
+            if not out:
+                continue
+            self._ingest_softwareupdate_defaults(
+                out, file=f"<defaults read {plist_path}>")
+            self.result.notes.append(
+                f"Captured `defaults read {plist_path}` "
+                f"({label}).")
+            # Stop at the first readable source — Managed Preferences wins.
+            break
+
+    def _ingest_softwareupdate_defaults(self, dump: str, *, file: str) -> None:
+        """Parse ``defaults read`` output for the SoftwareUpdate plist and
+        emit per-key evidence + missing-key entries for CIS §1.1 validation.
+
+        Expected input shape (lines like ``    Key = Value;`` inside braces):
+
+            {
+                AutomaticDownload = 1;
+                AutomaticallyInstallMacOSUpdates = 1;
+                ConfigDataInstall = 1;
+                CriticalUpdateInstall = 1;
+            }
+
+        Same omission rule as ``system_profiler`` applies: only keys
+        explicitly written into the plist appear in the dump; any
+        CIS-recommended key absent here is treated as **not enforced** and
+        drives ``SWUPDATE-MDM-KEY-MISSING``.
+        """
+        from . import apple_ddm
+
+        # Ground-truth marker — proves we actually read the plist (so a
+        # later CIS evaluator can flip "not-assessed" to "fail" when no
+        # PASS evidence emerges).
+        self.result.entries.append(LogEntry(
+            source=Source.SYSTEM, level=Level.INFO,
+            message="defaults read com.apple.SoftwareUpdate collected",
+            component="defaults", file=file,
+            raw="defaults:com.apple.SoftwareUpdate:collected",
+        ))
+
+        # Pick up every ``Key = Value;`` pair in the dump. Anchored to
+        # word boundaries so we don't catch nested braces.
+        pair_rx = re.compile(
+            r"^\s*([A-Za-z][A-Za-z0-9_.\-]*)\s*=\s*([^;]+?)\s*;?\s*$",
+            re.MULTILINE,
+        )
+        observed: dict[str, str] = {}
+        for m in pair_rx.finditer(dump):
+            key = m.group(1)
+            # Skip obvious non-leaf entries (containers, lookup strings).
+            if key.startswith("(") or key.startswith("{"):
+                continue
+            value = m.group(2).strip().strip('"')
+            observed[key] = value
+            # Tag the evidence with ``com.apple.SoftwareUpdate`` so it also
+            # satisfies the CIS-1.1 pass_pattern (policy is enforced).
+            self.result.entries.append(LogEntry(
+                source=Source.SYSTEM, level=Level.INFO,
+                message=(
+                    f"com.apple.SoftwareUpdate {key} = {value} "
+                    "(managed pref / on-disk plist)"),
+                component="defaults", file=file,
+                raw=f"defaults:com.apple.SoftwareUpdate:{key}={value}",
+            ))
+
+        # CIS §1.1 missing-key validation — same rule the
+        # system_profiler path uses, but driven by defaults output.
+        for key, expected in (
+            apple_ddm.SOFTWAREUPDATE_MDM_RECOMMENDED_KEYS.items()
+        ):
+            if observed.get(key) == expected:
+                continue
+            # Either the key is absent (most common) or the value differs;
+            # both mean the CIS-recommended setting is not enforced.
+            self.result.entries.append(LogEntry(
+                source=Source.SYSTEM, level=Level.ERROR,
+                message=(
+                    "Legacy com.apple.SoftwareUpdate plist is missing "
+                    f"CIS-recommended key {key} = {expected} "
+                    "(defaults read returned "
+                    f"{observed.get(key, '<absent>')!r})"),
+                component="defaults", file=file,
+                raw=f"mdm-validation: missing-key {key}={expected}",
+            ))
+
     def _ingest_ddm_softwareupdate_evidence(self, dump: str, *, file: str) -> None:
         """Scan a ``system_profiler SPConfigurationProfileDataType`` dump and
         emit one ``Source.SYSTEM`` evidence entry per relevant payload.

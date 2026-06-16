@@ -135,9 +135,12 @@ CIS_LEVEL1: list[CISCheck] = [
                      r"(enforcement\.specific|settings)|"
                      r"softwareupdate\.enforcement\.specific|"
                      r"\bcom\.apple\.SoftwareUpdate\b",
-        # If system_profiler ran successfully but no software-update
-        # payload was found, the control is FAIL — not "not-assessed".
-        ground_truth_marker=r"system_profiler.*SPConfigurationProfileDataType.*collected",
+        # If we proved we inspected an authoritative source (either
+        # ``system_profiler`` for the configuration profiles, or ``defaults
+        # read`` against the SoftwareUpdate plist) but no policy-enforcement
+        # evidence emerged, the control is FAIL — not "not-assessed".
+        ground_truth_marker=r"system_profiler.*SPConfigurationProfileDataType.*collected|"
+                            r"defaults.*com\.apple\.SoftwareUpdate.*collected",
         match_word=False,
         remediation_steps=(
             "In Intune ▸ **Devices ▸ Configuration profiles**, deploy a "
