@@ -234,6 +234,23 @@ class Collector:
             self.result.notes.append(
                 "Captured `profiles status -type enrollment` output.")
 
+        # `defaults read /Library/Preferences/com.apple.fdesetup.plist` —
+        # the device's FileVault deferral / enrolment record. A non-empty
+        # ``FileVault = { … }`` dictionary in that plist proves an MDM
+        # profile is steering FileVault (the dict carries the deferral
+        # config, profile UUID and enrolled usernames). Same omission rule
+        # as the other policy plists: an empty/missing FileVault key means
+        # FileVault is not being enforced.
+        out = _run(["defaults", "read",
+                    "/Library/Preferences/com.apple.fdesetup.plist"])
+        if out:
+            self._ingest_filevault_defaults(
+                out,
+                file="<defaults read /Library/Preferences/com.apple.fdesetup.plist>")
+            self.result.notes.append(
+                "Captured `defaults read /Library/Preferences/"
+                "com.apple.fdesetup.plist`.")
+
         # `defaults read /Library/Preferences/com.apple.SoftwareUpdate.plist`
         # — the effective enforced values for CIS §1.1 software-update
         # settings. Same omission rule as system_profiler: only keys that
@@ -331,6 +348,87 @@ class Collector:
                     f"{observed.get(key, '<absent>')!r})"),
                 component="defaults", file=file,
                 raw=f"mdm-validation: missing-key {key}={expected}",
+            ))
+
+    def _ingest_filevault_defaults(self, dump: str, *, file: str) -> None:
+        """Parse ``defaults read com.apple.fdesetup.plist`` output and emit
+        evidence the CIS-2.5.1 evaluator can use.
+
+        The plist looks like::
+
+            {
+                FileVault =     {
+                    Defer = 1;
+                    ProfileUUID = "c2d2...";
+                    Usernames = ( <user> );
+                };
+            }
+
+        A **non-empty** ``FileVault = { … }`` dictionary proves an MDM
+        FileVault-deferral profile is steering the device — that's the
+        signal we want. An absent or empty FileVault key means the policy
+        isn't being enforced.
+        """
+        # Ground-truth marker so CIS-2.5.1 can flip not-assessed -> fail
+        # when nothing positive emerges.
+        self.result.entries.append(LogEntry(
+            source=Source.SYSTEM, level=Level.INFO,
+            message="defaults read com.apple.fdesetup collected",
+            component="defaults", file=file,
+            raw="defaults:com.apple.fdesetup:collected",
+        ))
+
+        # Detect ``FileVault = { … };`` with at least one ``Key = Value;``
+        # inside the braces. Using a DOTALL match so the closing brace
+        # may live on a later line.
+        block_rx = re.compile(
+            r"FileVault\s*=\s*\{([^}]*)\};?",
+            re.IGNORECASE | re.DOTALL,
+        )
+        match = block_rx.search(dump)
+        non_empty = bool(match and re.search(r"\w+\s*=\s*\S", match.group(1)))
+
+        if non_empty:
+            body = match.group(1).strip()
+            # Pull out a small set of useful identity fields if present so
+            # the report's evidence chip names *which* MDM profile owns
+            # FileVault on this Mac.
+            uuid_m = re.search(r"ProfileUUID\s*=\s*\"?([^\";\n]+)\"?",
+                               body, re.IGNORECASE)
+            user_m = re.search(r"Usernames\s*=\s*\(([^)]*)\)",
+                               body, re.IGNORECASE | re.DOTALL)
+            defer_m = re.search(r"Defer\s*=\s*(\d+)", body, re.IGNORECASE)
+            tags: list[str] = []
+            if defer_m:
+                tags.append(f"Defer={defer_m.group(1)}")
+            if uuid_m:
+                tags.append(f"ProfileUUID={uuid_m.group(1).strip()}")
+            if user_m:
+                users = [u.strip().strip(",") for u in user_m.group(1).splitlines()
+                         if u.strip().strip(",")]
+                if users:
+                    tags.append(f"Users={','.join(users)}")
+            suffix = f" ({'; '.join(tags)})" if tags else ""
+            # Phrasing chosen to match the existing CIS-2.5.1 pass_pattern
+            # (``filevault.*(enabled|is on|turned on|: ?true)``).
+            self.result.entries.append(LogEntry(
+                source=Source.SYSTEM, level=Level.INFO,
+                message=(
+                    "FileVault is enabled via MDM fdesetup deferral "
+                    f"profile{suffix}"),
+                component="defaults", file=file,
+                raw=f"defaults:com.apple.fdesetup:FileVault=enabled{suffix}",
+            ))
+        else:
+            # Empty / absent FileVault dict — provably not enforced.
+            self.result.entries.append(LogEntry(
+                source=Source.SYSTEM, level=Level.ERROR,
+                message=(
+                    "FileVault is not enabled — fdesetup plist exists but "
+                    "the FileVault dictionary is empty or absent (no MDM "
+                    "deferral profile is steering FileVault)"),
+                component="defaults", file=file,
+                raw="defaults:com.apple.fdesetup:FileVault=empty",
             ))
 
     def _ingest_ddm_softwareupdate_evidence(self, dump: str, *, file: str) -> None:

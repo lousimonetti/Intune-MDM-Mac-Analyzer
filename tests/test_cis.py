@@ -259,6 +259,54 @@ def test_collector_emits_missing_key_error_for_incomplete_declaration():
     assert any("TargetLocalDateTime" in r for r in missing)
 
 
+def test_filevault_defaults_drives_cis_2_5_1_pass():
+    # Mirrors the user-reported `defaults read
+    # /Library/Preferences/com.apple.fdesetup.plist` output. A non-empty
+    # FileVault dict proves an MDM FileVault profile is steering the
+    # device -> CIS-2.5.1 must PASS.
+    from intune_analyzer.collector import Collector
+    from intune_analyzer.analyzer import Analyzer
+    dump = (
+        "{\n"
+        "    FileVault =     {\n"
+        "        AskAtUserLoginMaxBypassValue = 1;\n"
+        "        Defer = 1;\n"
+        "        DontAskAtUserLogout = 1;\n"
+        '        OutputPath = "/var/db/ConfigurationProfiles/fdesetup.plist";\n'
+        '        ProfileUUID = "c2d2e2e3-2de4-4751-be9e-1176aa2b2ba7";\n'
+        "        Usernames =         (\n"
+        "            LSimone3\n"
+        "        );\n"
+        "    };\n"
+        "}\n"
+    )
+    c = Collector()
+    c._ingest_filevault_defaults(
+        dump, file="<defaults read /Library/Preferences/com.apple.fdesetup.plist>")
+    res = Analyzer().analyze(c.result)
+    by_id = {ck.id: ck for ck in res.cis.checks}
+    assert by_id["CIS-2.5.1"].status == "pass"
+    # The synthesised evidence chip should name the profile UUID, deferral
+    # state, and enrolled user so the report doesn't just say "passed".
+    pass_evidence = " ".join(by_id["CIS-2.5.1"].evidence)
+    assert "c2d2e2e3-2de4-4751-be9e-1176aa2b2ba7" in pass_evidence
+    assert "LSimone3" in pass_evidence
+
+
+def test_filevault_defaults_empty_dict_fails_cis_2_5_1():
+    # Plist exists but the FileVault dictionary is empty -> CIS-2.5.1 FAIL
+    # via the ground_truth_marker path. (Empty plist => provably no MDM
+    # FileVault profile, so we are confident this is a real fail.)
+    from intune_analyzer.collector import Collector
+    from intune_analyzer.analyzer import Analyzer
+    dump = "{\n    FileVault =     {\n    };\n}\n"
+    c = Collector()
+    c._ingest_filevault_defaults(dump, file="<defaults read>")
+    res = Analyzer().analyze(c.result)
+    by_id = {ck.id: ck for ck in res.cis.checks}
+    assert by_id["CIS-2.5.1"].status == "fail"
+
+
 def test_defaults_read_drives_cis_pass_and_missing_keys():
     # Mirrors the user-reported `defaults read
     # /Library/Preferences/com.apple.SoftwareUpdate.plist` output: only 4

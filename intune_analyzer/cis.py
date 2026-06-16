@@ -230,6 +230,11 @@ CIS_LEVEL1: list[CISCheck] = [
         match_word=False,
         # FileVault status lines come from installer/system logs.
         fail_sources=frozenset({Source.INSTALL, Source.SYSTEM, Source.INTUNE}),
+        # If ``defaults read /Library/Preferences/com.apple.fdesetup.plist``
+        # was executed but no positive FileVault evidence emerged, the
+        # plist proves FileVault is NOT enrolled — flip to FAIL rather
+        # than the default ``not-assessed``.
+        ground_truth_marker=r"defaults.*com\.apple\.fdesetup.*collected",
         remediation_steps=(
             "Intune ▸ **Endpoint security ▸ Disk encryption** ▸ assign a "
             "FileVault profile with key escrow.",
