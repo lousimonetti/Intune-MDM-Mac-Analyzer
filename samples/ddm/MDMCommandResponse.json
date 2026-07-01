@@ -1,0 +1,13 @@
+{
+  "UDID": "00008030-001A2B3C4D5E6F7A",
+  "CommandUUID": "8f2e68a8-8f2e-4ad0-a7f2-65eb97c0de01",
+  "Status": "Error",
+  "ErrorChain": [
+    {
+      "ErrorDomain": "MCMDMErrorDomain",
+      "ErrorCode": 12040,
+      "LocalizedDescription": "Please log in to your iTunes Store account",
+      "USEnglishDescription": "Please log in to your iTunes Store account"
+    }
+  ]
+}

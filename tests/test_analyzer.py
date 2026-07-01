@@ -22,6 +22,36 @@ def test_all_sources_discovered(result):
         assert src in found, f"missing {src}"
 
 
+def test_ddm_status_report_findings_present(result):
+    # samples/ddm/*.json exercise the structured DDM StatusReport / MDM
+    # error-envelope parser end to end through the shared analysis run.
+    ids = {f.id for f in result.findings}
+    for expected in ("DDM-DECLARATION-INVALID", "MDM-ERROR-ENVELOPE"):
+        assert expected in ids, f"missing {expected}"
+    decl = next(f for f in result.findings if f.id == "DDM-DECLARATION-INVALID")
+    assert decl.count == 2  # one inactive activation + one failed configuration
+    err = next(f for f in result.findings if f.id == "MDM-ERROR-ENVELOPE")
+    assert "domain=MCMDMErrorDomain code=12040" in err.impacted
+
+
+def test_mdm_error_envelope_does_not_double_count_as_profile_fail(tmp_path):
+    # Regression: the broad `mdm.*(error|failed)` MDM-PROFILE-FAIL pattern
+    # (SYSTEM source) used to also match the ddm_status parser's synthetic
+    # "MDM command error: ..." lines, incorrectly demoting CIS-MDM to fail.
+    ddm = tmp_path / "ddm"
+    ddm.mkdir()
+    (ddm / "MDMCommandResponse.json").write_text(
+        '{"ErrorChain":[{"ErrorDomain":"MCMDMErrorDomain","ErrorCode":12040,'
+        '"LocalizedDescription":"Please log in to your iTunes Store account"}]}')
+    (tmp_path / "Intune").mkdir()
+    (tmp_path / "Intune" / "IntuneMDMAgent.log").write_text(
+        "2026-06-10 09:00:00 | I | all good\n")
+    res = run_analysis(input_path=str(tmp_path))
+    ids = {f.id for f in res.findings}
+    assert "MDM-ERROR-ENVELOPE" in ids
+    assert "MDM-PROFILE-FAIL" not in ids
+
+
 def test_key_findings_present(result):
     ids = {f.id for f in result.findings}
     for expected in {"INTUNE-AAD-TOKEN", "INTUNE-CHECKIN-FAIL",

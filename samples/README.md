@@ -17,5 +17,8 @@ samples/
 ├── system/         install.log (PackageKit install failure)
 ├── mdatp/          Defender health + install logs (unhealthy, RTP off, threat, install error)
 ├── autoupdate/     Microsoft AutoUpdate log (download failure, auto-update disabled)
-└── office/         Office app log (activation failure, crash)
+├── office/         Office app log (activation failure, crash)
+└── ddm/            Structured DDM StatusReport JSON (invalid declaration, failed
+                    app, softwareupdate failure) + an MDM command error-envelope
+                    JSON (ErrorChain/ErrorCode/ErrorDomain)
 ```

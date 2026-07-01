@@ -24,6 +24,7 @@ managed Mac itself or on an analyst's machine against collected logs.
 | **Microsoft AutoUpdate** | `/Library/Logs/Microsoft/autoupdate.log` | Update/download failures, automatic updates disabled |
 | **Microsoft Office** | `~/Library/Containers/com.microsoft.*/Data/Library/Logs/` | Activation/licensing failures, app crashes |
 | **macOS / MDM** | `system.log`, unified-log exports (`ManagedClient`/`mdmclient`) | Profile install problems, MDM errors |
+| **DDM status / MDM errors** | Structured `StatusReport.json` (Declarative Device Management check-in) or MDM command error envelope JSON/plist, dropped into a collected bundle | Inactive/invalid DDM declarations, failed configurations, managed-app state, softwareupdate DDM status, and standard MDM `ErrorChain`/`ErrorCode`/`ErrorDomain` command failures (a few common codes decoded to plain English) |
 
 Beyond signature matching, the analyzer adds **aggregate insight**: missing log
 sources (coverage gaps), elevated error rates, stale logs, and **opportunities

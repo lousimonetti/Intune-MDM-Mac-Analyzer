@@ -642,6 +642,12 @@ RULES: list[Rule] = [
         source=Source.SYSTEM,
         pattern=r"profile.*(failed to install|removed|not installed)|"
                 r"mdm.*(error|failed)|managedclient.*error",
+        # ``mdm.*(error|failed)`` is intentionally broad for legacy profile
+        # logs, but that means it also catches the structured DDM/MDM
+        # synthetic markers parsers.ddm_status emits (e.g. "MDM command
+        # error: ..."), which have their own dedicated rule
+        # (MDM-ERROR-ENVELOPE) and shouldn't double-count here.
+        exclude_pattern=r"mdm-error:|ddm-status:",
         severity=Severity.HIGH,
         title="MDM profile installation problems",
         description="macOS reported problems installing or retaining MDM "
@@ -854,6 +860,86 @@ RULES: list[Rule] = [
         false_positive_note=(
             "Only emitted when `system_profiler` was actually inspected; "
             "offline bundles without that dump will never trigger this rule."
+        ),
+    ),
+    Rule(
+        id="DDM-DECLARATION-INVALID",
+        # Catches the synthetic ``ddm-status:`` markers emitted by
+        # parsers.ddm_status when a structured DDM StatusReport JSON
+        # (StatusItems.management.declarations) shows an activation that is
+        # inactive/invalid, or a configuration whose ``reasons`` array is
+        # non-empty (Apple's schema: reasons are only populated on failure).
+        source=Source.SYSTEM,
+        pattern=r"ddm-status:\s*declaration-(inactive|error)\b",
+        subject_pattern=r"ddm-status:\s*declaration-(?:inactive|error)"
+                        r"\s+identifier=(\S+)",
+        subject_label="Declarations",
+        severity=Severity.HIGH,
+        title="DDM declaration failed to activate or apply",
+        description="A device's Declarative Device Management StatusReport "
+                    "shows a declaration that is not active/valid, or a "
+                    "configuration whose `reasons` array is populated — "
+                    "Apple only fills `reasons` when a declaration fails to "
+                    "apply, so this is a definitive failure, not a guess "
+                    "from log text.",
+        recommendation="Open the declaration in Intune, check the reported "
+                       "reasons for a schema/value error, and re-deploy after "
+                       "correcting it.",
+        remediation_steps=(
+            "Cross-reference the declaration identifier against the Intune "
+            "settings-catalog / DDM policy that owns it.",
+            "Compare its payload against the matching schema in "
+            "https://github.com/apple/device-management/tree/release/"
+            "declarative/declarations — a wrong type or missing required key "
+            "is the most common cause.",
+            "Re-deploy and pull a fresh StatusReport to confirm "
+            "`active=true`/`valid=valid` and an empty `reasons` array.",
+        ),
+        category="MDM",
+        docs_url="https://github.com/apple/device-management/tree/release/"
+                 "declarative/status",
+        false_positive_note=(
+            "Only emitted when a structured DDM StatusReport JSON was "
+            "supplied in the collected bundle; this rule never fires from "
+            "plain-text logs."
+        ),
+    ),
+    Rule(
+        id="MDM-ERROR-ENVELOPE",
+        # Catches the synthetic ``mdm-error:`` markers emitted by
+        # parsers.ddm_status for a standard MDM command-response error
+        # envelope (Status=Error, ErrorChain=[{ErrorDomain, ErrorCode,
+        # LocalizedDescription}, ...]). Not a YAML-defined payload — the
+        # envelope is part of the MDM protocol itself.
+        source=Source.SYSTEM,
+        pattern=r"mdm-error:\s*domain=",
+        subject_pattern=r"mdm-error:\s*(domain=\S+\s+code=\S+)",
+        subject_label="Error domains",
+        severity=Severity.HIGH,
+        title="MDM command returned an error",
+        description="The device's MDM command response included an "
+                    "ErrorChain entry — a command Intune sent (install, "
+                    "configure, query) failed on the device and returned a "
+                    "structured ErrorDomain/ErrorCode/LocalizedDescription.",
+        recommendation="Look up the ErrorDomain/ErrorCode pair (common ones "
+                       "are decoded automatically) and address the root "
+                       "cause before resending the command.",
+        remediation_steps=(
+            "Read the decoded description (or the device's own "
+            "LocalizedDescription if not a known code) for the specific "
+            "cause.",
+            "For MCMDMErrorDomain 12040, have the user sign in to the "
+            "App/iTunes Store; for 12021, confirm DDM is supported on the "
+            "target OS version before resending a DeclarativeManagement "
+            "command.",
+            "Resend the original MDM command from Intune once the "
+            "underlying condition is fixed.",
+        ),
+        category="MDM",
+        docs_url="https://developer.apple.com/forums/thread/675038",
+        false_positive_note=(
+            "Only emitted when a structured MDM error-envelope JSON/plist "
+            "was supplied in the collected bundle."
         ),
     ),
 

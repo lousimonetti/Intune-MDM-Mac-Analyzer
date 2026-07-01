@@ -38,8 +38,10 @@ collector  ->  parsers/*  ->  rules + analyzer  ->  report (HTML/PDF/JSON)
 | `collector.py` | Discover & read logs. Offline (folder/`.zip`) or `--live` (macOS paths + `mdatp health` + `app-sso platform -s`). |
 | `parsers/base.py` | Format-tolerant line parsing: timestamp heuristics, level detection, multi-line continuation. |
 | `parsers/*.py` | One module per source; each exposes `NAME`, `SOURCE`, `matches()`, `parse()`. |
+| `parsers/ddm_status.py` | Structured (not line-oriented) parser: DDM StatusReport JSON + MDM error-envelope JSON/plist → synthetic `Source.SYSTEM` entries (see Lesson L12). |
 | `parsers/__init__.py` | `select()` dispatch — **matches on filename + immediate parent dir only** (see Lesson L1). |
 | `rules.py` | Declarative `Rule` signatures (the domain knowledge). |
+| `apple_ddm.py` | Reference constants pulled from the Apple schema (DDM keys, install-state/failure-reason enums, MDM error-code decode table) — not a parser itself, imported by `collector.py`/`analyzer.py`/`parsers/ddm_status.py`. |
 | `cis.py` | CIS Level 1 control specs + evidence-based validation → `CISReport` (match-score KPI). |
 | `analyzer.py` | Collapses rule matches into `Finding`s + aggregate heuristics + health score; runs `cis.evaluate`. |
 | `report.py` | HTML / JSON / PDF renderers. PDF tries weasyprint -> wkhtmltopdf -> browser fallback. |
@@ -50,7 +52,7 @@ collector  ->  parsers/*  ->  rules + analyzer  ->  report (HTML/PDF/JSON)
 new module in `parsers/` + register in `REGISTRY` (order matters; most specific
 first, `install` is the catch-all for `*install.log`).
 
-Run `pytest` (25 tests). Try it: `python3 -m intune_analyzer --input samples`.
+Run `pytest` (66 tests). Try it: `python3 -m intune_analyzer --input samples`.
 
 ---
 
@@ -203,6 +205,24 @@ Run `pytest` (25 tests). Try it: `python3 -m intune_analyzer --input samples`.
   `allowCloudBTMM` simply disappeared). When adding a new validator key,
   confirm it is still in the current Apple device-management schema
   before relying on it.
+- **L12 — Structured JSON evidence still needs `exclude_pattern` hygiene.**
+  `parsers/ddm_status.py` turns a DDM StatusReport / MDM error-envelope JSON
+  into synthetic `Source.SYSTEM` entries (same technique as the
+  `system_profiler`/`defaults` ingestion in L11) so existing text-based rules
+  (`DDM-APP-STATE`, `SWUPDATE-FAIL`) fire on them for free. But a *new*
+  synthetic line is still a line every other `source=Source.SYSTEM` rule gets
+  to see — the broad, pre-existing `MDM-PROFILE-FAIL` pattern
+  (`mdm.*(error|failed)`, no anchoring) matched the literal phrase "MDM
+  command error" in the new `MDM-ERROR-ENVELOPE` synthetic line, silently
+  double-counting it and demoting `CIS-MDM` to fail. Fixed by giving
+  `MDM-PROFILE-FAIL` an `exclude_pattern=r"mdm-error:|ddm-status:"` that
+  carves out the two marker prefixes this parser always embeds in `raw`.
+  Rule of thumb from L8 generalises: **every time a parser starts emitting
+  synthetic entries with a new literal marker, re-run the full sample set and
+  diff CIS status before/after** (`CISReport` flips are the cheapest way to
+  catch an accidental collision) — don't just check that the new rule fires,
+  check that no *old* rule fired on the new text too. Regression:
+  `test_mdm_error_envelope_does_not_double_count_as_profile_fail`.
 
 ---
 
@@ -251,6 +271,32 @@ accept PRs — file feedback via Feedback Assistant). Repo layout: `mdm/`
   cross-checked against an external fleet-validation script (see Section 6
   below).
 
+**Structured DDM StatusReport / MDM error-envelope parsing (`parsers/ddm_status.py`).**
+Closes the "text logs, not status-report JSON" gap below for two shapes an
+analyst may have in a collected bundle:
+- **DDM StatusReport** (`{"StatusItems": {...}}`) — the JSON body a device
+  sends on the Declarative Management check-in channel. Apple's schema
+  documents each status item's *value* (`declarative/status/*.yaml`) but not
+  the enclosing envelope, so the nesting (`StatusItems.management.declarations
+  .{activations,configurations}`, `StatusItems.app.managed.list`,
+  `StatusItems.softwareupdate.*`) was cross-checked against real StatusReport
+  payloads shared by MDM server implementers (kmfddm/micromdm), not a YAML
+  file. New rule `DDM-DECLARATION-INVALID` fires when an activation is
+  `active=false`/`valid≠valid`, or a configuration's `reasons` array is
+  non-empty (Apple only populates `reasons` on failure, so this is positive
+  evidence, not a guess). The app-list and softwareupdate items are converted
+  into text that the *existing* `DDM-APP-STATE`/`SWUPDATE-FAIL` rules already
+  match, so no duplicate detection logic was needed for those two.
+- **MDM command error envelope** (`{"Status": "Error", "ErrorChain": [...]}`)
+  — the standard failure shape for *any* MDM command result
+  (`ErrorDomain`/`ErrorCode`/`LocalizedDescription`/`USEnglishDescription`).
+  Not a YAML-defined payload (it's part of the MDM protocol itself, not a
+  declarative configuration), so `apple_ddm.MDM_ERROR_CODES` cross-checks a
+  small (domain, code) → human-text table against Apple Developer Forums
+  threads rather than a schema file — treat it as a starting point, not an
+  exhaustive enum. New rule `MDM-ERROR-ENVELOPE`. See Lesson L12 for the
+  false-positive collision this surfaced and how it was fixed.
+
 **Platform SSO (PSSO) — grounded in Microsoft Learn, not the Apple schema.**
 PSSO is delivered by the **Microsoft Enterprise SSO extension** inside the
 Company Portal app (`com.microsoft.CompanyPortalMac.ssoextension`, team
@@ -297,18 +343,22 @@ The map ties CIS to our existing signals (e.g. `DEFENDER-*` → `CIS-6.3`,
 `MDM-ENROLL-WELLKNOWN`/`INTUNE-ENROLL-FAIL` → `CIS-MDM`, the
 `FileVault is not enabled` compliance line → `CIS-2.5.1`). Exposed in HTML (KPI
 ring + per-control table), the CLI summary line, the GUI status bar, and the
-`cis` key of `--json`. **Future work:** when DDM status-report JSON or the MDM
-error envelope is parsed, add structured CIS controls (firewall/Gatekeeper
-state, audit config) instead of relying on log-text signals.
+`cis` key of `--json`. **Future work:** `parsers/ddm_status.py` now parses DDM
+status-report JSON and the MDM error envelope (see above), but no CIS control
+consumes that structured data directly yet (e.g. firewall/Gatekeeper state,
+audit config as DDM status items rather than log-text signals) — the two new
+rules feed the general findings list and health score, not a CIS check.
 
 **Known gaps / future work:**
-- We parse **text logs**, not DDM **status-report JSON**. Intune increasingly
-  uses Declarative Device Management; a dedicated parser for DDM status reports
-  (`management.declarations`, `app.managed.list`, `softwareupdate.*`) would let
-  us read structured state instead of regexing log text.
-- The standard MDM error envelope (`ErrorChain`/`ErrorCode`/`ErrorDomain`/
-  `LocalizedDescription`) is not yet parsed; worth a structured plist/JSON
-  parser if those payloads appear in collected bundles.
+- ~~We parse text logs, not DDM status-report JSON~~ — closed by
+  `parsers/ddm_status.py` (structured `StatusItems` + MDM error envelope).
+  Still open: no CIS control reads the structured data directly (see above),
+  and `MDM_ERROR_CODES` covers only two verified (domain, code) pairs — extend
+  it as more are confirmed rather than guessing.
+- We don't yet read a DDM StatusReport or MDM error envelope in **live** mode
+  (there's no simple local `mdatp`/`app-sso`-style CLI command that emits
+  either — they're normally obtained via the MDM server/Graph API), so this
+  path only activates for **offline** bundles that include such a file.
 
 ---
 
@@ -323,6 +373,19 @@ state, audit config) instead of relying on log-text signals.
   - well-known.failed error: <https://github.com/apple/device-management/blob/release/mdm/errors/well-known.failed.yaml>
   - MDM errors dir: <https://github.com/apple/device-management/tree/release/mdm/errors>
   - Declarative status items dir: <https://github.com/apple/device-management/tree/release/declarative/status>
+- MDM `ErrorChain`/`ErrorCode`/`ErrorDomain`/`LocalizedDescription` envelope
+  (not in a YAML file — part of the MDM protocol; cross-checked against
+  real-world reports since Apple doesn't publish a schema for it):
+  - MCMDMErrorDomain 12040 ("Please log in to your iTunes Store account"):
+    <https://developer.apple.com/forums/thread/675038>
+  - MCMDMErrorDomain 12021 ("DeclarativeManagement" not a valid request type):
+    <https://developer.apple.com/forums/thread/717027>
+- DDM `StatusReport.StatusItems` envelope shape (`management.declarations`
+  `.activations`/`.configurations`, `app.managed.list`) — Apple documents each
+  status item's value but not the enclosing envelope, so this was
+  cross-checked against real implementer examples: kmfddm (Apple DDM server):
+  <https://github.com/jessepeterson/kmfddm>, MicroMDM's DDM write-up:
+  <https://micromdm.io/blog/wwdc21-declarative-management/>
 
 ### Microsoft Learn (log locations & failure modes)
 - Shell scripts on macOS + **log collection** (confirms Intune agent log paths

@@ -136,3 +136,49 @@ def decode_failure_reasons(text: str) -> list[str]:
             seen.add(human)
             out.append(human)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Standard MDM command-response error envelope.
+#
+# Every MDM command result that fails carries ``"Status": "Error"`` plus an
+# ``ErrorChain`` array of objects, each with ``ErrorDomain`` (string),
+# ``ErrorCode`` (integer), ``LocalizedDescription`` and
+# ``USEnglishDescription``. Apple does not publish a JSON schema file for this
+# envelope in apple/device-management (it's part of the MDM protocol, not a
+# YAML-defined payload/command), so the (domain, code) -> description pairs
+# below are cross-checked against reports on Apple Developer Forums rather
+# than a schema file:
+#   - MCMDMErrorDomain 12040 "Please log in to your iTunes Store account"
+#     https://developer.apple.com/forums/thread/675038
+#   - MCMDMErrorDomain 12021 "DeclarativeManagement" is not a valid request
+#     type for the target OS/device
+#     https://developer.apple.com/forums/thread/717027
+# Treat this table as a starting point, not an exhaustive enum — unlike the
+# DDM YAML schema, there is no canonical published list.
+# ---------------------------------------------------------------------------
+
+MDM_ERROR_CODES: dict[tuple[str, int], str] = {
+    ("MCMDMErrorDomain", 12040): (
+        "Please log in to your iTunes/App Store account — the app-install "
+        "command can't proceed without an active Store session on the device."
+    ),
+    ("MCMDMErrorDomain", 12021): (
+        "\"DeclarativeManagement\" is not a valid request type for this "
+        "device/OS version — DDM isn't supported or enabled here."
+    ),
+}
+
+
+def decode_mdm_error(domain: str, code) -> str:
+    """Human-readable text for a known ``(ErrorDomain, ErrorCode)`` pair.
+
+    Returns an empty string when the pair isn't in :data:`MDM_ERROR_CODES` —
+    callers should fall back to the raw ``LocalizedDescription`` the device
+    itself supplied, which is always present in a well-formed error envelope.
+    """
+    try:
+        code_int = int(code)
+    except (TypeError, ValueError):
+        return ""
+    return MDM_ERROR_CODES.get((str(domain), code_int), "")

@@ -1,0 +1,66 @@
+{
+  "StatusItems": {
+    "management": {
+      "declarations": {
+        "activations": [
+          {
+            "active": true,
+            "identifier": "49F6F16A-70EB-4A89-B092-465FAEC5E550",
+            "valid": "valid",
+            "server-token": "c306a35e-438c-55ca-af4c-e847d7bda0f9"
+          },
+          {
+            "active": false,
+            "identifier": "7C1A2E10-9B3C-4E2D-8F51-1B2C3D4E5F60",
+            "valid": "invalid",
+            "server-token": "9a71-cd42"
+          }
+        ],
+        "configurations": [
+          {
+            "identifier": "softwareupdate.enforcement.specific.contoso",
+            "reasons": []
+          },
+          {
+            "identifier": "com.contoso.macos.restrictions",
+            "reasons": [
+              {"code": "invalid-payload", "description": "Unsupported key 'DisableAirDrop' for this OS version"}
+            ]
+          }
+        ]
+      }
+    },
+    "app": {
+      "managed": {
+        "list": [
+          {
+            "identifier": "com.microsoft.CompanyPortalMac",
+            "name": "Company Portal",
+            "version": "5.2404.0",
+            "short-version": "5.2404.0",
+            "state": "managed",
+            "config-state": {"app-config-state": {"state": "valid"}},
+            "declaration-identifier": "app.managed.companyportal"
+          },
+          {
+            "identifier": "com.acme.vpnclient",
+            "name": "Acme VPN Client",
+            "version": "3.2",
+            "short-version": "3.2.0",
+            "state": "failed",
+            "config-state": {"app-config-state": {"state": "unknown"}},
+            "declaration-identifier": "app.managed.acmevpn"
+          }
+        ]
+      }
+    },
+    "softwareupdate": {
+      "install-state": "failed",
+      "failure-reason": {
+        "count": 2,
+        "reason": "download-failed",
+        "timestamp": "2026-06-20T14:32:00Z"
+      }
+    }
+  }
+}
